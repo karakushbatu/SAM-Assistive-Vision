@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    container_name: sam-vision-app
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+    # Enable NVIDIA GPU support
+    # Note: Requires NVIDIA Container Toolkit installed on the host machine
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    # Restart policy
+    restart: unless-stopped
+    # Use polling for fast-api auto-reload if needed on Windows
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload

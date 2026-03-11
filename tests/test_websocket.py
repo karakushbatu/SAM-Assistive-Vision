@@ -1,0 +1,81 @@
+"""
+WebSocket smoke test -- verifies the full 4-stage mock pipeline end-to-end.
+
+Expected per-frame exchange:
+    SEND    binary  -> JPEG frame
+    RECV    text    -> JSON metadata  (msg 1)
+    RECV    binary  -> MP3 audio     (msg 2)
+
+Run with:
+    python tests/test_websocket.py
+(Make sure the server is running: uvicorn main:app --reload)
+"""
+
+import asyncio
+import json
+import sys
+
+try:
+    import websockets
+except ImportError:
+    print("ERROR: 'websockets' not found. Run: pip install websockets")
+    sys.exit(1)
+
+
+SERVER_URL = "ws://localhost:8000/ws/vision"
+
+# Minimal valid 1x1 white JPEG
+DUMMY_JPEG_BYTES = bytes([
+    0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01,
+    0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xDB, 0x00, 0x43,
+    0x00, 0x08, 0x06, 0x06, 0x07, 0x06, 0x05, 0x08, 0x07, 0x07, 0x07, 0x09,
+    0x09, 0x08, 0x0A, 0x0C, 0x14, 0x0D, 0x0C, 0x0B, 0x0B, 0x0C, 0x19, 0x12,
+    0x13, 0x0F, 0x14, 0x1D, 0x1A, 0x1F, 0x1E, 0x1D, 0x1A, 0x1C, 0x1C, 0x20,
+    0x24, 0x2E, 0x27, 0x20, 0x22, 0x2C, 0x23, 0x1C, 0x1C, 0x28, 0x37, 0x29,
+    0x2C, 0x30, 0x31, 0x34, 0x34, 0x34, 0x1F, 0x27, 0x39, 0x3D, 0x38, 0x32,
+    0x3C, 0x2E, 0x33, 0x34, 0x32, 0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x01,
+    0x00, 0x01, 0x01, 0x01, 0x11, 0x00, 0xFF, 0xC4, 0x00, 0x1F, 0x00, 0x00,
+    0x01, 0x05, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+    0x09, 0x0A, 0x0B, 0xFF, 0xC4, 0x00, 0xB5, 0x10, 0x00, 0x02, 0x01, 0x03,
+    0x03, 0x02, 0x04, 0x03, 0x05, 0x05, 0x04, 0x04, 0x00, 0x00, 0x01, 0x7D,
+    0xFF, 0xDA, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3F, 0x00, 0xFB, 0xFF,
+    0xD9,
+])
+
+
+async def run_test():
+    print(f"Connecting to {SERVER_URL} ...")
+    try:
+        async with websockets.connect(SERVER_URL) as ws:
+            print("Connected! Sending dummy JPEG frame...")
+            await ws.send(DUMMY_JPEG_BYTES)
+
+            # Message 1: JSON metadata (text)
+            raw_text = await ws.recv()
+            assert isinstance(raw_text, str), "Expected text (JSON) as first message"
+            result = json.loads(raw_text)
+
+            # Message 2: MP3 audio (binary)
+            audio_bytes = await ws.recv()
+            assert isinstance(audio_bytes, bytes), "Expected binary (MP3) as second message"
+
+            print("\n--- Pipeline Result ---")
+            print(f"  status          : {result['status']}")
+            print(f"  frame_id        : {result['frame_id']}")
+            print(f"  description     : {result['description']}")
+            print(f"  total_latency   : {result['total_latency_ms']} ms")
+            print(f"  sam masks       : {result['pipeline']['sam']['masks_found']}")
+            print(f"  labels          : {result['pipeline']['classifier']['labels']}")
+            print(f"  tts audio size  : {result['pipeline']['tts']['audio_size_bytes']} bytes")
+            print(f"  mp3 received    : {len(audio_bytes)} bytes")
+            print("\nTest PASSED! (4-stage mock pipeline OK)")
+
+    except ConnectionRefusedError:
+        print("\nERROR: Could not connect. Is the server running?")
+        print("Run: uvicorn main:app --host 0.0.0.0 --port 8000 --reload")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    asyncio.run(run_test())

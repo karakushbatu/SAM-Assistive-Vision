@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Environment files (never commit secrets)
+.env
+
+# IDE / OS
+.vscode/settings.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# --- Test / debug output files (generated during development) ---
+*.mp3
+*.wav
+test_output*
+real_tts_output*
+real_full_output*
+speed_test_*
+turkce_test*
+
+# Models / large binary files (use Git LFS instead)
+*.pt
+*.pth
+*.onnx
+*.bin
+*.safetensors
+models/
+weights/
+
+# Claude memory (local only)
+.claude/
