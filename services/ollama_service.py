@@ -110,13 +110,27 @@ async def _run_real(classifier_result: dict[str, Any]) -> dict[str, Any]:
 
     logger.info("Ollama [real] | model=%s | labels=%s", settings.ollama_model, labels)
 
-    async with httpx.AsyncClient(timeout=settings.ollama_timeout_seconds) as client:
-        response = await client.post(
-            f"{settings.ollama_base_url}/api/generate",
-            json=payload,
+    # B3: Separate connect timeout (3s fast-fail) from read timeout (full budget)
+    timeout = httpx.Timeout(settings.ollama_timeout_seconds, connect=3.0)
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                f"{settings.ollama_base_url}/api/generate",
+                json=payload,
+            )
+            response.raise_for_status()
+            data = response.json()
+    except httpx.ConnectError:
+        raise RuntimeError(
+            f"Ollama is unreachable at {settings.ollama_base_url}. "
+            "Make sure Ollama is running: ollama serve"
         )
-        response.raise_for_status()
-        data = response.json()
+    except httpx.TimeoutException:
+        raise RuntimeError(
+            f"Ollama timed out after {settings.ollama_timeout_seconds}s. "
+            f"Model '{settings.ollama_model}' may still be loading — try again in a moment."
+        )
 
     description = _clean_output(data.get("response", ""))
     latency = round((time.monotonic() - t) * 1000, 2)

@@ -12,10 +12,31 @@ Current state: MOCK (Phase 1)
 Next: FastSAM via ultralytics (Phase 2)
 """
 
+import asyncio
+import time
+import random
 from typing import Any
 
 from core.config import settings
 from core.logger import logger
+
+# ---------------------------------------------------------------------------
+# B2: Frame validation — accepted image magic bytes
+# ---------------------------------------------------------------------------
+
+_JPEG_MAGIC = b"\xff\xd8\xff"
+_PNG_MAGIC  = b"\x89PNG"
+
+
+def _validate_image(image_bytes: bytes) -> None:
+    """Raise ValueError if bytes are not a valid JPEG or PNG."""
+    if not (image_bytes[:3] == _JPEG_MAGIC or image_bytes[:4] == _PNG_MAGIC):
+        raise ValueError(
+            f"Invalid image format: expected JPEG or PNG, "
+            f"got magic bytes 0x{image_bytes[:4].hex()} "
+            f"(size={len(image_bytes)} bytes)"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Public interface -- this is the ONLY function ai_pipeline.py should call
@@ -34,7 +55,11 @@ async def run_sam(image_bytes: bytes) -> dict[str, Any]:
             "bounding_boxes": list[dict],   # [{"x","y","w","h"}, ...]
             "latency_ms":     float,
         }
+
+    Raises:
+        ValueError: If image_bytes is not a valid JPEG or PNG.
     """
+    _validate_image(image_bytes)
     if settings.mock_sam:
         return await _run_mock(image_bytes)
     return await _run_fastsam(image_bytes)
@@ -43,11 +68,6 @@ async def run_sam(image_bytes: bytes) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Implementation: Mock (Phase 1)
 # ---------------------------------------------------------------------------
-
-import asyncio
-import time
-import random
-
 
 async def _run_mock(image_bytes: bytes) -> dict[str, Any]:
     t = time.monotonic()
@@ -80,4 +100,4 @@ async def _run_fastsam(image_bytes: bytes) -> dict[str, Any]:
         results = model(image, device="cuda", retina_masks=True, conf=0.4, iou=0.9)
         ...
     """
-    raise NotImplementedError("FastSAM not yet integrated. Set MOCK_PIPELINE=true.")
+    raise NotImplementedError("FastSAM not yet integrated. Set MOCK_SAM=true.")
