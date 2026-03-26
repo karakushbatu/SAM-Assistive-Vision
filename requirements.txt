@@ -13,28 +13,32 @@ python-multipart==0.0.12
 # --- Configuration ---
 pydantic-settings==2.6.1
 
-# --- Image Processing (needed from Phase 2 onward, installed early) ---
-# Pinned versions removed — allow pip to find a wheel compatible with the
-# current Python version (3.14+). Minimum versions are enforced below.
+# --- Image Processing ---
 pillow>=11.1.0
 numpy>=2.1.0
 
-# --- HTTP Client (used in Phase 4 for Ollama API calls) ---
+# --- HTTP Client (Ollama API calls) ---
 httpx==0.27.2
 
-# --- TTS (Phase 4A — active now) ---
+# --- TTS (Stage 6 -- active) ---
 edge-tts>=7.0.0
 
 # ============================================================
 # Future dependencies (uncomment when entering each phase):
 # ============================================================
-# Phase 2 — SAM
+
+# Stage 1: STT — faster-whisper
+# faster-whisper>=1.0.0     # CTranslate2 backend, 4-10x faster than openai/whisper
+# soundfile>=0.12.0         # WAV audio loading
+# sounddevice>=0.4.0        # Microphone recording (mic_test.py demo)
+
+# Stage 3: SAM — FastSAM via ultralytics
 # torch>=2.2.0
 # torchvision
-# ultralytics        # FastSAM
-# segment-anything   # MobileSAM
-#
-# Phase 3 — Classifier
-# open-clip-torch    # CLIP
-# transformers       # HuggingFace (alternative)
+# ultralytics>=8.0.0        # FastSAM-s.pt and FastSAM-x.pt
+
+# Stage 4: BLIP — image captioning via HuggingFace
+# transformers>=4.40.0
+# torch>=2.2.0              # shared with SAM
+# accelerate>=0.27.0        # GPU memory optimization
 # ============================================================

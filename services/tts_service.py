@@ -16,7 +16,7 @@ Available Turkish voices (Edge TTS):
     tr-TR-AhmetNeural   -- male
 """
 
-from typing import Any
+from typing import Any, AsyncGenerator
 
 from core.config import settings
 from core.logger import logger
@@ -97,6 +97,31 @@ async def _run_edge_tts(ollama_result: dict[str, Any]) -> dict[str, Any]:
     latency = round((time.monotonic() - t) * 1000, 2)
     logger.info("TTS [edge] done | size=%d bytes | %.1fms", len(audio_bytes), latency)
     return {"audio_bytes": audio_bytes, "audio_size_bytes": len(audio_bytes), "latency_ms": latency}
+
+
+# ---------------------------------------------------------------------------
+# Streaming interface (TTS_STREAMING=true)
+# ---------------------------------------------------------------------------
+
+async def stream_tts(text: str) -> AsyncGenerator[bytes, None]:
+    """
+    Yield MP3 audio chunks as Edge TTS generates them.
+
+    Allows the WebSocket handler to send audio to the client before the
+    full synthesis is complete — reduces perceived latency.
+    Only used when TTS_STREAMING=true and MOCK_TTS=false.
+
+    Args:
+        text: Turkish description text to synthesize.
+
+    Yields:
+        bytes: MP3 audio chunk.
+    """
+    import edge_tts
+    communicate = edge_tts.Communicate(text, settings.tts_voice, rate=settings.tts_rate)
+    async for chunk in communicate.stream():
+        if chunk["type"] == "audio":
+            yield chunk["data"]
 
 
 # ---------------------------------------------------------------------------
