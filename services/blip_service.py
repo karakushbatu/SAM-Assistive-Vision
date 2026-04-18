@@ -1,21 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-Caption Service (Moondream2) -- Image Captioning Stage
-========================================================
+Caption Service (BLIP) -- Image Captioning Stage
+================================================
 Adapter layer for the image captioning model.
 
 Pipeline position: Stage 4 (after SAM)
     Input : Raw image bytes + SAM segmentation result (crops)
     Output: A natural language caption describing the scene
 
-Model: vikhyatk/moondream2 (~2GB VRAM on RTX 5060 Ti, ~150ms inference)
-       Replaces Salesforce/blip-image-captioning-large (~4GB VRAM, ~700ms)
-
-Why Moondream2 over BLIP-large:
-    - 2x faster inference (~150ms vs ~700ms per crop)
-    - ~2GB less VRAM (more headroom for SAM + Ollama)
-    - Purpose-built for edge/real-time captioning
-    - Same pipeline interface -- drop-in replacement
+Current model: Salesforce/blip-image-captioning-large.
+Moondream2 was tested and reverted because the available Windows setup needed
+native libvips or incompatible Transformers revisions.
 
 To swap back to BLIP or try another caption model:
     - Change BLIP_MODEL in .env (and BLIP_MODEL_REVISION if needed)
@@ -30,6 +25,7 @@ from typing import Any
 
 from core.config import settings
 from core.logger import logger
+from core.runtime import gpu_inference_lock, resolve_model_device, torch_dtype_for_device
 
 
 # ---------------------------------------------------------------------------
@@ -50,22 +46,47 @@ def load_blip_model() -> None:
     if _model is not None:
         return  # already loaded
 
-    import torch
-    from transformers import BlipProcessor, BlipForConditionalGeneration
+    from transformers import (
+        AutoTokenizer,
+        BlipForConditionalGeneration,
+        BlipImageProcessor,
+        BlipProcessor,
+    )
 
+    device = resolve_model_device()
+    torch_dtype = torch_dtype_for_device(device)
     logger.info("Loading caption model: %s ...", settings.blip_model)
     t = time.monotonic()
 
-    _tokenizer = BlipProcessor.from_pretrained(settings.blip_model)
+    try:
+        _tokenizer = BlipProcessor.from_pretrained(
+            settings.blip_model,
+            local_files_only=settings.hf_local_files_only,
+        )
+    except OSError:
+        logger.warning(
+            "BLIP processor_config missing; falling back to image_processor + tokenizer."
+        )
+        image_processor = BlipImageProcessor.from_pretrained(
+            settings.blip_model,
+            local_files_only=settings.hf_local_files_only,
+        )
+        text_tokenizer = AutoTokenizer.from_pretrained(
+            settings.blip_model,
+            local_files_only=settings.hf_local_files_only,
+        )
+        _tokenizer = BlipProcessor(image_processor=image_processor, tokenizer=text_tokenizer)
+
     _model = BlipForConditionalGeneration.from_pretrained(
         settings.blip_model,
-        torch_dtype=torch.float16,
-    ).to("cuda")
+        torch_dtype=torch_dtype,
+        local_files_only=settings.hf_local_files_only,
+    ).to(device)
     _model.eval()
 
     elapsed = round((time.monotonic() - t) * 1000)
     logger.info("Caption model loaded in %dms | VRAM: %.1fGB",
-                elapsed, torch.cuda.memory_allocated() / 1e9)
+                elapsed, _allocated_vram_gb())
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +95,7 @@ def load_blip_model() -> None:
 
 async def run_blip(image_bytes: bytes, sam_result: dict[str, Any]) -> dict[str, Any]:
     """
-    Generate a scene caption from the image using Moondream2.
+    Generate a scene caption from the image using the configured caption model.
 
     Args:
         image_bytes: Raw JPEG/PNG bytes (same frame passed to SAM).
@@ -120,12 +141,12 @@ async def _run_mock(image_bytes: bytes, sam_result: dict[str, Any]) -> dict[str,
 
 
 # ---------------------------------------------------------------------------
-# Implementation: Real Moondream2 model
+# Implementation: Real BLIP model
 # ---------------------------------------------------------------------------
 
 async def _run_caption_model(image_bytes: bytes, sam_result: dict[str, Any]) -> dict[str, Any]:
     """
-    Run Moondream2 inference.
+    Run BLIP inference.
 
     If SAM produced crops, caption each crop separately and join them.
     This gives the LLM richer per-object descriptions than a single
@@ -148,9 +169,11 @@ async def _run_caption_model(image_bytes: bytes, sam_result: dict[str, Any]) -> 
     def _caption_pil(pil_img) -> str:
         """Caption a single PIL image using BLIP."""
         import torch
-        inputs = _tokenizer(pil_img, return_tensors="pt").to("cuda", torch.float16)
+        device = resolve_model_device()
+        dtype = torch_dtype_for_device(device)
+        inputs = _tokenizer(pil_img, return_tensors="pt").to(device, dtype)
         with torch.no_grad():
-            out = _model.generate(**inputs, max_new_tokens=40)
+            out = _model.generate(**inputs, max_new_tokens=settings.blip_max_new_tokens)
         return _tokenizer.decode(out[0], skip_special_tokens=True)
 
     def _open_full_image() -> Image.Image:
@@ -164,10 +187,12 @@ async def _run_caption_model(image_bytes: bytes, sam_result: dict[str, Any]) -> 
         if crops:
             import torch
             # Batch all crops into a single GPU forward pass (faster than sequential)
+            device = resolve_model_device()
+            dtype = torch_dtype_for_device(device)
             crop_imgs = [Image.open(io.BytesIO(b)).convert("RGB") for b in crops]
-            inputs = _tokenizer(crop_imgs, return_tensors="pt", padding=True).to("cuda", torch.float16)
+            inputs = _tokenizer(crop_imgs, return_tensors="pt", padding=True).to(device, dtype)
             with torch.no_grad():
-                out = _model.generate(**inputs, max_new_tokens=40)
+                out = _model.generate(**inputs, max_new_tokens=settings.blip_max_new_tokens)
             raw_captions = [_tokenizer.decode(o, skip_special_tokens=True).strip() for o in out]
             # Filter artifacts and duplicates
             seen: set[str] = set()
@@ -177,15 +202,26 @@ async def _run_caption_model(image_bytes: bytes, sam_result: dict[str, Any]) -> 
                     seen.add(cap)
                     captions.append(cap)
             if captions:
-                return "; ".join(captions[:3])[:200]
+                return "; ".join(captions[:settings.blip_max_captions])[:200]
             # All crops produced bad output -- fall back to full image
             return _caption_pil(_open_full_image())
         else:
             # No SAM crops -- fall back to full image
             return _caption_pil(_open_full_image())
 
-    caption = await asyncio.to_thread(_infer)
+    async with gpu_inference_lock:
+        caption = await asyncio.to_thread(_infer)
 
     latency = round((time.monotonic() - t) * 1000, 2)
     logger.info("Caption [real] done | %.1fms | caption=%s", latency, caption)
     return {"caption": caption, "latency_ms": latency}
+
+
+def _allocated_vram_gb() -> float:
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return torch.cuda.memory_allocated() / 1e9
+    except Exception:
+        pass
+    return 0.0

@@ -16,6 +16,7 @@ pydantic-settings==2.6.1
 # --- Image Processing ---
 pillow>=11.1.0
 numpy>=2.1.0
+scipy>=1.14.0
 
 # --- HTTP Client (Ollama API calls) ---
 httpx==0.27.2
@@ -23,22 +24,18 @@ httpx==0.27.2
 # --- TTS (Stage 6 -- active) ---
 edge-tts>=7.0.0
 
-# ============================================================
-# Future dependencies (uncomment when entering each phase):
-# ============================================================
+# --- STT (Stage 1 -- active) ---
+faster-whisper>=1.0.0
+soundfile>=0.12.0
+sounddevice>=0.4.0        # Microphone recording (tests/mic_test.py demo)
 
-# Stage 1: STT — faster-whisper
-# faster-whisper>=1.0.0     # CTranslate2 backend, 4-10x faster than openai/whisper
-# soundfile>=0.12.0         # WAV audio loading
-# sounddevice>=0.4.0        # Microphone recording (mic_test.py demo)
+# --- Vision Models (Stages 3-4 -- active) ---
+# Install torch/torchvision separately for your target runtime.
+# Local CUDA setup uses the cu128 wheel index before installing this file.
+ultralytics>=8.0.0
+transformers>=4.40.0
+accelerate>=0.27.0
 
-# Stage 3: SAM — FastSAM via ultralytics
-# torch>=2.2.0
-# torchvision
-# ultralytics>=8.0.0        # FastSAM-s.pt and FastSAM-x.pt
-
-# Stage 4: BLIP — image captioning via HuggingFace
-# transformers>=4.40.0
-# torch>=2.2.0              # shared with SAM
-# accelerate>=0.27.0        # GPU memory optimization
-# ============================================================
+# --- OCR (Stage 4b -- active in OCR mode) ---
+paddlepaddle==3.0.0
+paddleocr==3.4.0

@@ -11,6 +11,25 @@ services:
     environment:
       - HOST=0.0.0.0
       - PORT=8000
+      - MODEL_DEVICE=auto
+      - MOCK_STT=false
+      - MOCK_SAM=false
+      - MOCK_BLIP=false
+      - MOCK_OLLAMA=false
+      - MOCK_TTS=false
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - OLLAMA_MODEL=qwen2.5:7b
+      - OLLAMA_NUM_CTX=512
+      - STT_MODEL=small
+      - STT_COMPUTE_TYPE=auto
+      - STT_MAX_AUDIO_SECONDS=8
+      - MAX_FRAME_SIZE=640
+      - MAX_WS_FRAME_BYTES=10485760
+      - SAM_MAX_CROPS=3
+      - BLIP_MAX_CAPTIONS=3
+      - BLIP_MAX_NEW_TOKENS=32
+      - OLLAMA_NUM_PREDICT=80
+      - TTS_STREAMING=true
     # Enable NVIDIA GPU support
     # Note: Requires NVIDIA Container Toolkit installed on the host machine
     deploy:

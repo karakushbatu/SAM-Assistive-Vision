@@ -26,6 +26,7 @@ Thumbs.db
 *.log
 
 # --- Test / debug output files (generated during development) ---
+tests/output/
 *.mp3
 *.wav
 test_output*

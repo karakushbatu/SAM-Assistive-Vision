@@ -1,5 +1,5 @@
 """
-WebSocket smoke test -- verifies the full 4-stage mock pipeline end-to-end.
+WebSocket smoke test -- verifies the current pipeline end-to-end.
 
 Expected per-frame exchange:
     SEND    binary  -> JPEG frame
@@ -52,13 +52,13 @@ async def run_test():
             await ws.send(DUMMY_JPEG_BYTES)
 
             # Message 1: JSON metadata (text)
-            raw_text = await ws.recv()
+            raw_text = await recv_json_text(ws, {"ok", "busy", "error"})
             assert isinstance(raw_text, str), "Expected text (JSON) as first message"
             result = json.loads(raw_text)
 
             # Message 2: MP3 audio (binary)
-            audio_bytes = await ws.recv()
-            assert isinstance(audio_bytes, bytes), "Expected binary (MP3) as second message"
+            audio_bytes = await recv_audio(ws, result)
+            assert isinstance(audio_bytes, bytes), "Expected binary MP3 bytes"
 
             print("\n--- Pipeline Result ---")
             print(f"  status          : {result['status']}")
@@ -66,15 +66,43 @@ async def run_test():
             print(f"  description     : {result['description']}")
             print(f"  total_latency   : {result['total_latency_ms']} ms")
             print(f"  sam masks       : {result['pipeline']['sam']['masks_found']}")
-            print(f"  labels          : {result['pipeline']['classifier']['labels']}")
+            print(f"  blip caption    : {result['pipeline']['blip']['caption']}")
             print(f"  tts audio size  : {result['pipeline']['tts']['audio_size_bytes']} bytes")
             print(f"  mp3 received    : {len(audio_bytes)} bytes")
-            print("\nTest PASSED! (4-stage mock pipeline OK)")
+            print("\nTest PASSED! (WebSocket pipeline OK)")
 
     except ConnectionRefusedError:
         print("\nERROR: Could not connect. Is the server running?")
         print("Run: uvicorn main:app --host 0.0.0.0 --port 8000 --reload")
         sys.exit(1)
+
+
+async def recv_json_text(ws, statuses: set[str]) -> str:
+    while True:
+        msg = await ws.recv()
+        if not isinstance(msg, str):
+            continue
+        data = json.loads(msg)
+        if data.get("status") == "ping":
+            continue
+        if data.get("status") in statuses:
+            return msg
+
+
+async def recv_audio(ws, metadata: dict) -> bytes:
+    if not metadata.get("audio_streaming"):
+        msg = await ws.recv()
+        return msg if isinstance(msg, bytes) else b""
+
+    chunks: list[bytes] = []
+    while True:
+        msg = await ws.recv()
+        if isinstance(msg, bytes):
+            chunks.append(msg)
+            continue
+        event = json.loads(msg)
+        if event.get("status") == "audio_end":
+            return b"".join(chunks)
 
 
 if __name__ == "__main__":

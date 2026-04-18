@@ -1,19 +1,13 @@
 """
-Classifier Service -- Object Labeling Stage
-============================================
-Adapter layer for the classification model.
-
-To swap the model (CLIP <-> ResNet <-> any future model):
-    - Only change the implementation inside run_classifier()
-    - The function signature and return shape MUST stay identical
-
-Current state: MOCK (Phase 1)
-Next: CLIP via open-clip-torch (Phase 3)
+Legacy Classifier Service
+=========================
+This module is intentionally kept as a compatibility shim for older scripts.
+The active pipeline no longer uses CLIP/ResNet classification; SAM crops are
+captioned directly by blip_service.py and synthesized by the LLM.
 """
 
 from typing import Any
 
-from core.config import settings
 from core.logger import logger
 
 # ---------------------------------------------------------------------------
@@ -34,9 +28,8 @@ async def run_classifier(sam_result: dict[str, Any]) -> dict[str, Any]:
             "latency_ms":  float,
         }
     """
-    if settings.mock_classifier:
-        return await _run_mock(sam_result)
-    return await _run_clip(sam_result)
+    logger.warning("classifier_service is deprecated; use blip_service instead.")
+    return await _run_mock(sam_result)
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +51,7 @@ async def _run_mock(sam_result: dict[str, Any]) -> dict[str, Any]:
     t = time.monotonic()
     n = sam_result["masks_found"]
     logger.info("Classifier [mock] | masks=%d", n)
-    await asyncio.sleep(settings.mock_classifier_delay_ms / 1000)
+    await asyncio.sleep(0.01)
     labels = random.sample(OBJECT_LABELS, min(n, len(OBJECT_LABELS)))
     confidences = [round(random.uniform(0.70, 0.99), 3) for _ in labels]
     latency = round((time.monotonic() - t) * 1000, 2)

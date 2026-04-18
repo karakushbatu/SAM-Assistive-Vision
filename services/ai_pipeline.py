@@ -23,7 +23,8 @@ from core.logger import logger
 from services.stt_service import run_stt
 from services.sam_service import run_sam
 from services.blip_service import run_blip
-from services.ollama_service import run_ollama
+from services.ocr_service import run_ocr
+from services.ollama_service import run_ollama, run_ollama_ocr
 from services.tts_service import run_tts
 
 
@@ -44,6 +45,7 @@ async def run_full_pipeline(
     mode: str = "scene",
     history: list[dict] | None = None,
     skip_tts: bool = False,
+    precomputed_stt: dict[str, Any] | None = None,
 ) -> PipelineResult:
     """
     Execute the 5-stage pipeline sequentially on one image frame.
@@ -57,6 +59,9 @@ async def run_full_pipeline(
                      Keep last 3 exchanges. Pass None or [] for no context.
         skip_tts:    If True, skip Stage 6 (TTS). Used by streaming mode in
                      main.py so the WebSocket handler can stream audio directly.
+        precomputed_stt:
+                     Optional STT result when the caller already transcribed audio
+                     to route fast intents before running the vision pipeline.
 
     Returns:
         PipelineResult:
@@ -67,21 +72,31 @@ async def run_full_pipeline(
     t_start = time.monotonic()
     logger.info("Pipeline START | frame_id=%s | mode=%s", frame_id, mode)
 
-    # Stage 1: STT — transcribe voice query (skipped instantly if audio=None)
-    stt_result = await run_stt(audio_bytes)
+    # Stage 1: STT - transcribe voice query (skipped instantly if audio=None)
+    stt_result = precomputed_stt if precomputed_stt is not None else await run_stt(audio_bytes)
 
     # Stage 3: SAM — segment the image into regions
     sam_result = await run_sam(image_bytes)
 
-    # Stage 4: BLIP — caption the scene (image -> text)
-    blip_result = await run_blip(image_bytes, sam_result)
+    if mode == "ocr":
+        ocr_result = await run_ocr(image_bytes, sam_result)
+        ollama_result = await run_ollama_ocr(
+            ocr_result,
+            user_query=stt_result["text"],
+            history=history or [],
+        )
+        blip_result = {"caption": None, "latency_ms": 0.0}
+    else:
+        # Stage 4: BLIP - caption the scene (image -> text)
+        blip_result = await run_blip(image_bytes, sam_result)
 
-    # Stage 5: LLM — generate Turkish description from caption + query + history
-    ollama_result = await run_ollama(
-        blip_result,
-        user_query=stt_result["text"],
-        history=history or [],
-    )
+        # Stage 5: LLM - generate Turkish description from caption + query + history
+        ollama_result = await run_ollama(
+            blip_result,
+            user_query=stt_result["text"],
+            history=history or [],
+        )
+        ocr_result = {"text": None, "status": "idle", "source": None, "latency_ms": 0.0}
 
     # Stage 6: TTS — skip if caller wants to stream audio directly
     if skip_tts:
@@ -108,6 +123,11 @@ async def run_full_pipeline(
                        "latency_ms":       sam_result["latency_ms"]},
             "blip":   {"caption":          blip_result["caption"],
                        "latency_ms":       blip_result["latency_ms"]},
+            "ocr":    {"status":           ocr_result["status"],
+                       "text_preview":     (ocr_result["text"] or "")[:160],
+                       "source":           ocr_result["source"],
+                       "model":            ocr_result.get("model"),
+                       "latency_ms":       ocr_result["latency_ms"]},
             "ollama": {"latency_ms":       ollama_result["latency_ms"]},
             "tts":    {"audio_size_bytes": tts_result["audio_size_bytes"],
                        "latency_ms":       tts_result["latency_ms"]},

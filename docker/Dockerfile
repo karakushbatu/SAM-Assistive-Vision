@@ -1,15 +1,10 @@
 # ============================================================
 # SAM Assistive Vision — Dockerfile
 # ============================================================
-# Phase 1-3: CPU-only base image (slim + fast builds)
-# Phase 4+:  Switch FROM line to nvidia/cuda image (see comment below)
+# GPU-ready base image for FastSAM + BLIP inference.
 # ============================================================
 
-# --- Phase 1-3 (current): CPU base ---
-FROM python:3.11-slim
-
-# --- Phase 4+ (GPU): Uncomment this and comment the line above ---
-# FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04
+FROM pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime
 
 # ---- System dependencies ----
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -17,11 +12,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1-mesa-glx \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
-
-# --- When using GPU base image, also install Python ---
-# RUN apt-get update && apt-get install -y python3.11 python3-pip \
-#     && ln -s /usr/bin/python3.11 /usr/bin/python \
-#     && rm -rf /var/lib/apt/lists/*
 
 # ---- Working directory ----
 WORKDIR /app

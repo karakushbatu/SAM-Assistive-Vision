@@ -1,203 +1,87 @@
 # Project Progress
 
-## Phase Tracker
+## Current Phase
+- Phase 0: Scaffold + Memory Bank - done
+- Phase 1: Mock pipeline + WebSocket - done
+- Phase 2: Real STT + SAM + caption + LLM + TTS - done
+- Phase 3: Android-ready backend contract - done
+- Phase 4: GPU local runtime + performance tuning - done
+- Phase 5: OCR branch refactor and evaluation - in progress
+- Phase 6: Cloud deployment - pending
+- Phase 7: Android client handoff - pending
 
-| Phase | Description | Status |
-|---|---|---|
-| Phase 0 | Scaffold + Memory Bank | ✅ DONE |
-| Phase 1 | Mock Pipeline + WebSocket | ✅ DONE |
-| Phase 1.5 | Real TTS + Real Ollama + Backend Hardening (B1-B4) | ✅ DONE |
-| Phase 2 | Real BLIP + PyTorch/CUDA setup | ✅ DONE |
-| Phase 3 | Real STT — faster-whisper + Intent Service | ✅ DONE |
-| Phase 4 | Real SAM — FastSAM-s | ✅ DONE |
-| Phase 5 | Context Window + Conversation History | ✅ DONE |
-| Phase 6 | Android Frontend Integration | ⏳ PENDING |
-| Phase 7 | OCR Branch (EasyOCR + SAM crop) | ⏳ PENDING |
-| Phase 8 | Cloud Deploy (RunPod/Vast.ai) | ⏳ PENDING |
+## Current Active Pipeline
 
----
-
-## Final Pipeline Architecture (pipeline.jpg)
-
-```
-Stage 1: STT    faster-whisper tiny  voice -> Turkish text              [REAL]
-Stage 2: Camera Android WebSocket    JPEG frames @ 1fps
-Stage 3: SAM    FastSAM-s            image (max 640px) -> crops         [REAL]
-Stage 4: Caption Moondream2          crops -> EN captions (per-object)  [REAL]
-Stage 5: LLM    Ollama / qwen2.5:7b  caption -> Turkish desc.           [REAL]
-Stage 6: TTS    Edge TTS EmelNeural  text -> MP3 (streamed chunks)      [REAL]
+```text
+image or audio+image
+  -> optional faster-whisper STT
+  -> FastSAM-s
+  -> scene mode: BLIP-large -> qwen2.5:7b -> Edge TTS
+  -> ocr mode: PaddleOCR -> qwen2.5:7b summary -> Edge TTS
 ```
 
-Key: SAM + Moondream2 converts image to text. LLM needs NO vision capability.
-SAM produces per-object crops → Moondream2 captions each crop → semicolon-joined → Ollama synthesizes.
+## Important Replacements vs pipeline.jpg
+- Mobile/OpenCV camera side replaced by Android-ready WebSocket upload contract.
+- Vision path is `FastSAM-s + BLIP-large`.
+- OCR branch is no longer only a plan; PaddleOCR backend was integrated.
+- Legacy OCR fallback still exists as `OCR_BACKEND=ollama_vision`.
+- LLM default remains `qwen2.5:7b`.
 
----
+## Verified Runtime State (2026-04-16)
+- `.venv` on Python `3.12.10`
+- CUDA active with `torch 2.11.0+cu128`
+- GPU: `RTX 5060 Ti 16GB`
+- Ollama models verified:
+  - `qwen2.5:7b`
+  - `qwen3:4b`
+  - `glm-ocr:latest`
+  - `gemma3:4b`
+  - `llama3.2:3b`
 
-## Current .env Active State
+## Latest Measured Results
 
-```
-MOCK_STT=false         <- REAL: faster-whisper tiny (CUDA ~35ms)
-MOCK_SAM=false         <- REAL: FastSAM-s (ultralytics, CUDA ~23ms)
-MOCK_BLIP=false        <- REAL: Moondream2 (~2GB VRAM, ~150ms)
-MOCK_OLLAMA=false      <- REAL: qwen2.5:7b via Ollama
-MOCK_TTS=false         <- REAL: Edge TTS tr-TR-EmelNeural +30%
-OLLAMA_MODEL=qwen2.5:7b
-BLIP_MODEL=vikhyatk/moondream2
-BLIP_MODEL_REVISION=2025-01-09
-MAX_FRAME_SIZE=640
-TTS_STREAMING=true
-```
+### Scene mode direct benchmark
+- `ilaç.jpg`: about `7250 ms`
+- `ss1_test1.jpg`: about `1907 ms`
+- `yulaf.jpg`: about `2062 ms`
+- average: about `3739 ms`
 
-## Installed Environment
-- Python 3.14, venv at ./venv/
-- torch 2.11.0+cu128 | CUDA=True | GPU=RTX 5060 Ti 16GB
-- transformers 5.3.0, accelerate 1.13.0
-- ultralytics (FastSAM-s), faster-whisper, sounddevice
-- BLIP weights cached: Salesforce/blip-image-captioning-large
-- FastSAM weights: FastSAM-s.pt (local)
-- Ollama installed (Windows desktop app), models: qwen2.5:7b (4.7GB), llama3.2:3b (1.9GB)
+### OCR mode direct benchmark with PaddleOCR
+- `ilaç.jpg`: about `22625 ms`
+- `ss1_test1.jpg`: about `6343 ms`
+- `yulaf.jpg`: about `19047 ms`
+- average: about `16005 ms`
+- OCR text output was empty on all three sample images.
 
----
+## Current Bottlenecks
+1. Scene mode:
+   - Main bottleneck remains Ollama generation.
+2. OCR mode:
+   - PaddleOCR on current Windows local runtime falls back to CPU and misses text on provided samples.
+3. TTS:
+   - Edge TTS adds network-backed tail latency.
 
-## Architecture Decisions
+## What Changed Most Recently
+- Integrated `PaddleOCR` as the new OCR backend.
+- Added `OCR_BACKEND`, `PADDLEOCR_LANG`, and `PADDLEOCR_VERSION` config knobs.
+- Added OCR warmup/readiness integration in `main.py`.
+- Added Paddle cache isolation inside workspace for safer local runs.
+- Re-tested `qwen3:4b` locally against `qwen2.5:7b`.
+- Rewrote README to reflect the real current state and current testing commands.
+- Direct testing showed:
+  - `qwen3:4b` is not a good replacement yet in the current Ollama flow.
+  - PaddleOCR is integrated, but not yet a good default for this Windows demo stack.
 
-| Topic | Decision |
-|-------|----------|
-| Input | 1fps JPEG from Android via WebSocket |
-| Output | 2 WS messages: JSON text + MP3 binary |
-| TTS | Edge TTS, tr-TR-EmelNeural, +30% |
-| LLM | Ollama local, Turkish output, qwen2.5:7b |
-| LLM selection | qwen2.5:7b: excellent Turkish, low hallucination, brand/drug knowledge |
-| Offline | NOT required (always online) |
-| Backpressure | Android waits for both messages before next frame |
-| SAM model | FastSAM-s (GPU-optimized ultralytics, top 4 crops by area) |
-| SAM crops | Min area fraction 2%, max 4 crops, passed as JPEG bytes to BLIP |
-| BLIP model | blip-image-captioning-large (~4GB VRAM) |
-| BLIP strategy | Caption each SAM crop separately; join top 3; truncate to 200 chars |
-| STT model | faster-whisper tiny (4-10x faster than openai/whisper, ~35ms warm) |
-| Context window | Last 3 exchanges per WebSocket session |
-| OCR decision | LLM-based yes/no (2-call: OCR check first, then description) |
-| OCR offer | Post-processing string append (not LLM-generated, keeps speed) |
+## Current Recommendation
+- Keep `qwen2.5:7b` as default scene and OCR-summary model.
+- Keep PaddleOCR support in the codebase.
+- For a working local OCR demo right now, use:
+  - `OCR_BACKEND=ollama_vision`
+  - `OCR_MODEL=glm-ocr:latest`
 
----
-
-## Full Interaction Scenario (Target UX)
-
-1. **Wake up**: User taps OR says "kamerayı aç" → STT detects → camera starts
-2. **Frame + voice**: User points camera at object. Speaks optionally. Silence = no query.
-3. **Pipeline runs**: SAM (crops) → BLIP (per-crop captions) → Ollama (caption + query + history) → TTS
-4. **Response + proactive**:
-   - Medicine/labeled box → Ollama OCR check returns "yes" → description + "Üzerindeki yazıları okumamı ister misiniz?" + `ocr_available:true`
-   - Game/nature/food without label → OCR check returns "no" → direct description only
-   - Brand name detected → Ollama adds brief explanation (e.g. "Kreon, sindirim ilacı")
-5. **OCR mode** (user confirms "evet"/"oku"): SAM crops object → EasyOCR → Ollama (summarize critical info) → TTS
-6. **Follow-ups**: User asks "protein değeri nedir?" → system uses conversation history
-7. **Unrelated question**: Context naturally drops (Ollama handles gracefully)
-
-### OCR Decision Logic (2-Call Architecture)
-
-| What BLIP sees | OCR Check result | Behavior |
-|---------------|-----------------|----------|
-| medicine/pill/capsule/prescription box | yes | Description + OCR offer appended |
-| technical label, sign, receipt, menu | yes | Description + OCR offer appended |
-| game screenshot, nature, furniture | no | Standard description only |
-| food without visible label | no | Standard description only |
-
-OCR offer is appended as post-processing string (`_OCR_OFFER`) — not generated by LLM — to keep description fast and consistent.
-
----
-
-## Backend API Design (Mobile-Ready)
-
-The backend is designed as a standalone REST+WebSocket API:
-
-- `GET /` — version info
-- `GET /health` — full status: Ollama probe, loaded models, mock flags
-- `WS /ws/vision` — main pipeline endpoint
-
-**WebSocket protocol (per frame):**
-```
-SEND    binary  → raw JPEG from camera
-RECEIVE text    → JSON: {status, frame_id, description, user_query,
-                          ocr_available, total_latency_ms, pipeline:{...}}
-RECEIVE binary  → MP3 audio bytes
-```
-
-Android only needs to: open WebSocket → send JPEG → receive JSON + MP3 → play audio.
-Future: extend frame to include audio bytes for STT.
-
-**Cloud migration**: All config via .env, docker-compose.yml ready with GPU passthrough.
-Change `OLLAMA_BASE_URL` and `HOST` for cloud deploy. Android just updates the server IP.
-
----
-
-## Work Log
-
-- [2026-03-11] Project scaffold, mock pipeline, Memory Bank created
-- [2026-03-12] Real Ollama + Edge TTS activated
-              B1: Ollama warmup on startup
-              B2: JPEG/PNG magic byte validation
-              B3: Ollama fast-fail (3s connect timeout)
-              B4: Detailed /health endpoint
-- [2026-03-21] Pipeline restructured to 5 stages per pipeline.jpg
-              Added: stt_service.py, blip_service.py
-              Replaced: classifier_service.py → blip_service.py
-              Ollama now accepts BLIP caption + optional STT user_query
-- [2026-03-25] Real BLIP integrated and tested
-              torch 2.11.0+cu128 installed, CUDA verified on RTX 5060 Ti
-              BLIP model loads in ~43s first time, ~5s from cache
-              Inference: ~600-800ms per frame
-              BLIP warmup added to main.py lifespan
-              cline_docs/ → renamed to memory_bank/ by user
-              .env MOCK_BLIP=false confirmed working
-- [2026-03-26] Pipeline optimizations applied:
-              Moondream2 migration attempted → reverted (transformers 5.x + Windows libvips incompatible)
-              BLIP-large kept: stable, bottleneck is Ollama ~1.3s not BLIP ~950ms
-              Adaptive frame resize: MAX_FRAME_SIZE=640, images thumbnailed before SAM + BLIP
-              Streaming TTS: TTS_STREAMING=true, Edge TTS chunks sent over WebSocket live
-              Frame skip lock: per-connection asyncio.Lock, busy → silent skip response
-              WebSocket heartbeat: _ping_loop() every 20s, prevents connection timeout
-              /health: GPU VRAM stats (used/total/device), models_loaded, active_connections
-              ai_pipeline.py: skip_tts=True parameter for streaming mode
-              main.py: connection counter, ping task, lock, streaming TTS path
-              Tested: ilaç/Kreon (OCR ✅), FPS game (OCR false ✅), yulaf (Türkçe ✅)
-              Measured latency: SAM ~60-350ms, BLIP ~950ms, Ollama ~1.3s, total ~3.2-4.6s
-- [2026-03-26] Phase 3+4+5 completed in one session:
-              Real faster-whisper tiny STT activated (CUDA, ~35ms warm)
-              tests/mic_test.py created — microphone demo with sounddevice
-              intent_service.py created — Turkish keyword → scene/ocr/replay/mute/camera
-              Real FastSAM-s integrated (ultralytics) — top 4 crops by area, min 2% size
-              FastSAM warmup added to main.py lifespan (CUDA dummy inference)
-              BLIP multi-crop: each SAM crop captioned separately, joined with ";", max 3
-              "araf" artifact filter added to BLIP output
-              LLM switched from llama3.2:3b → qwen2.5:7b (better Turkish, brand knowledge)
-              2-call Ollama architecture: OCR check (yes/no) + description (separate calls)
-              OCR offer added as post-processing string (not LLM-generated)
-              Proactive OCR offer: "Üzerindeki yazıları okumamı ister misiniz?"
-              Chinese character issue fixed: explicit "SADECE Türkçe" in system prompts
-              Conversation history injected into Ollama prompt (last 2 previous descriptions)
-              .env: all MOCK flags = false, OLLAMA_MODEL=qwen2.5:7b
-
----
-
-## Future Plans
-
-### OCR Branch (Phase 7)
-- Trigger: STT keyword ("oku", "evet") OR `ocr_available:true` in metadata
-- Flow: Image → SAM (crop main object bounding box) → EasyOCR → Ollama (summarize) → TTS
-- Medicine prompt: etken madde, dozaj, uyarılar
-- Food prompt: içerik, alerjenler, besin değerleri
-- EasyOCR with Turkish language — no extra GPU model needed
-
-### Binary Protocol STT Extension (Phase 6) — PLANNED
-- Current: Android sends raw JPEG bytes only; audio_bytes=None always
-- Future binary envelope: [4-byte little-endian audio_length][WAV audio bytes][JPEG bytes]
-- Parse logic: read first 4 bytes as audio_len; if 0 or JPEG magic (FF D8 FF) → legacy format
-- stt_service.py: transcribe_audio(audio_bytes) writes WAV to tempfile, passes to faster-whisper
-- config.py: STT_MIN_AUDIO_BYTES=8000 (noise filter for short packets)
-- This enables real voice queries from the phone microphone over WebSocket
-
-### Cloud Deploy (Phase 8)
-- RunPod or Vast.ai, GPU instance
-- docker compose up → Android updates IP → done
-- Plan for 1-2 weeks before presentation
+## Next Practical Steps
+1. Decide whether PaddleOCR stays default or becomes opt-in until Linux/cloud validation.
+2. Add one more OCR backend candidate if needed:
+   - EasyOCR or a lighter detector+recognizer stack.
+3. Validate STT end-to-end with a real WAV sample over WebSocket.
+4. Move to cloud only after OCR branch behavior is locked.

@@ -21,6 +21,7 @@ from typing import Any
 
 from core.config import settings
 from core.logger import logger
+from core.runtime import gpu_inference_lock, resolve_model_device
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +67,7 @@ def load_sam_model() -> None:
     # Warmup: dummy inference to initialize CUDA kernels
     import numpy as np
     dummy = np.zeros((480, 640, 3), dtype=np.uint8)
-    _sam_model(dummy, device="cuda", retina_masks=False, conf=0.4, iou=0.9, verbose=False)
+    _sam_model(dummy, device=resolve_model_device(), retina_masks=False, conf=0.4, iou=0.9, verbose=False)
     logger.info("SAM CUDA warmup complete")
 
 
@@ -117,13 +118,6 @@ async def _run_mock(image_bytes: bytes) -> dict[str, Any]:
 # Implementation: FastSAM (real)
 # ---------------------------------------------------------------------------
 
-# Max regions to pass to BLIP — more regions = more BLIP calls = more latency
-_MAX_CROPS = 4
-
-# Minimum crop area as fraction of total image — skip tiny noise regions
-_MIN_AREA_FRACTION = 0.02
-
-
 async def _run_fastsam(image_bytes: bytes) -> dict[str, Any]:
     """
     Run FastSAM-s segmentation on the image.
@@ -135,7 +129,8 @@ async def _run_fastsam(image_bytes: bytes) -> dict[str, Any]:
     t = time.monotonic()
     logger.info("SAM [real] | input=%d bytes", len(image_bytes))
 
-    result = await asyncio.to_thread(_fastsam_infer, image_bytes)
+    async with gpu_inference_lock:
+        result = await asyncio.to_thread(_fastsam_infer, image_bytes)
 
     latency = round((time.monotonic() - t) * 1000, 2)
     logger.info("SAM [real] done | masks=%d | %.1fms", result["masks_found"], latency)
@@ -156,7 +151,7 @@ def _fastsam_infer(image_bytes: bytes) -> dict[str, Any]:
 
     results = _sam_model(
         pil_image,
-        device="cuda",
+        device=resolve_model_device(),
         retina_masks=False,
         conf=0.4,
         iou=0.9,
@@ -169,12 +164,12 @@ def _fastsam_infer(image_bytes: bytes) -> dict[str, Any]:
             x1, y1, x2, y2 = map(int, box)
             w, h = x2 - x1, y2 - y1
             area_frac = (w * h) / total_area
-            if area_frac >= _MIN_AREA_FRACTION:
+            if area_frac >= settings.sam_min_area_fraction:
                 boxes_raw.append({"x": x1, "y": y1, "w": w, "h": h, "_area": w * h})
 
     # Sort by area descending, take top N
     boxes_raw.sort(key=lambda b: b["_area"], reverse=True)
-    top_boxes = boxes_raw[:_MAX_CROPS]
+    top_boxes = boxes_raw[:settings.sam_max_crops]
 
     # Crop each region from original image
     crops = []

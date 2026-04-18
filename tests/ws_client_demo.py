@@ -29,6 +29,7 @@ import os
 import sys
 import time
 import argparse
+import struct
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -46,7 +47,17 @@ def make_test_jpeg(width=640, height=480) -> bytes:
     return buf.getvalue()
 
 
-async def run_client(host: str, port: int, image_path: str | None, frame_count: int):
+def build_payload(jpeg_bytes: bytes, audio_path: str | None) -> bytes:
+    """Build legacy image payload or audio+image envelope."""
+    if not audio_path:
+        return jpeg_bytes
+
+    with open(audio_path, "rb") as f:
+        audio_bytes = f.read()
+    return struct.pack("<I", len(audio_bytes)) + audio_bytes + jpeg_bytes
+
+
+async def run_client(host: str, port: int, image_path: str | None, audio_path: str | None, frame_count: int):
     import websockets
 
     url = f"ws://{host}:{port}/ws/vision"
@@ -63,34 +74,42 @@ async def run_client(host: str, port: int, image_path: str | None, frame_count: 
         jpeg_bytes = make_test_jpeg()
 
     print(f"Sunucu: {url}")
+    payload = build_payload(jpeg_bytes, audio_path)
     print(f"Frame sayisi: {frame_count}")
+    print(f"Payload modu: {'audio+image envelope' if audio_path else 'legacy image'}")
     print("-" * 55)
 
     async with websockets.connect(url, max_size=10 * 1024 * 1024) as ws:
         print("WebSocket baglantisi acildi\n")
 
         for frame_num in range(1, frame_count + 1):
-            print(f"[Frame {frame_num}/{frame_count}] JPEG gonderiliyor ({len(jpeg_bytes)} bytes)...")
+            print(f"[Frame {frame_num}/{frame_count}] payload gonderiliyor ({len(payload)} bytes)...")
             t_send = time.monotonic()
 
-            await ws.send(jpeg_bytes)
+            await ws.send(payload)
 
-            # Message 1: JSON metadata
-            json_msg = await ws.recv()
-            metadata = json.loads(json_msg)
-
-            # Message 2: MP3 audio
-            mp3_bytes = await ws.recv()
+            metadata = await receive_json_event(ws, expected_statuses={"ok", "busy", "error"})
+            mp3_bytes = await receive_audio_response(ws, metadata)
 
             total_ms = round((time.monotonic() - t_send) * 1000)
 
             if metadata.get("status") == "error":
                 print(f"  HATA: {metadata.get('message')}")
                 continue
+            if metadata.get("status") == "busy":
+                print("  Sunucu mesgul, frame atlandi.")
+                continue
 
-            print(f"  BLIP caption  : {metadata['pipeline']['blip']['caption']}")
+            blip_caption = metadata["pipeline"]["blip"]["caption"]
+            ocr_preview = metadata["pipeline"]["ocr"]["text_preview"]
+            if blip_caption:
+                print(f"  BLIP caption  : {blip_caption}")
+            if ocr_preview:
+                print(f"  OCR preview   : {ocr_preview}")
             print(f"  Turkce aciklama: {metadata['description']}")
             print(f"  OCR teklifi   : {metadata.get('ocr_available', False)}")
+            if metadata.get("mode") == "ocr":
+                print(f"  OCR durumu    : {metadata.get('ocr_status')}")
             print(f"  Toplam sure   : {total_ms}ms  (server-side: {metadata['total_latency_ms']:.0f}ms)")
             print(f"  Ses           : {len(mp3_bytes)//1024}KB MP3")
 
@@ -117,12 +136,49 @@ async def run_client(host: str, port: int, image_path: str | None, frame_count: 
     print(f"Tum MP3 dosyalar: tests/output/")
 
 
+async def receive_json_event(ws, expected_statuses: set[str]) -> dict:
+    """Receive JSON text and ignore heartbeat pings."""
+    while True:
+        msg = await ws.recv()
+        if not isinstance(msg, str):
+            continue
+        event = json.loads(msg)
+        if event.get("status") == "ping":
+            continue
+        if event.get("status") in expected_statuses:
+            return event
+
+
+async def receive_audio_response(ws, metadata: dict) -> bytes:
+    """
+    Receive one full audio response.
+    Non-streaming: one binary message.
+    Streaming: binary chunks until text event status=audio_end.
+    """
+    chunks: list[bytes] = []
+    if not metadata.get("audio_streaming"):
+        audio_msg = await ws.recv()
+        return audio_msg if isinstance(audio_msg, bytes) else b""
+
+    while True:
+        msg = await ws.recv()
+        if isinstance(msg, bytes):
+            chunks.append(msg)
+            continue
+        event = json.loads(msg)
+        if event.get("status") == "ping":
+            continue
+        if event.get("status") == "audio_end":
+            return b"".join(chunks)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Android WebSocket Client Simulator")
     parser.add_argument("--host",   default="localhost",    help="Sunucu IP (varsayilan: localhost)")
     parser.add_argument("--port",   default=8000, type=int, help="Port (varsayilan: 8000)")
     parser.add_argument("--image",  default=None,           help="JPEG dosya yolu")
+    parser.add_argument("--audio",  default=None,           help="WAV audio dosya yolu (opsiyonel)")
     parser.add_argument("--frames", default=3,   type=int,  help="Gonderilecek frame sayisi")
     args = parser.parse_args()
 
-    asyncio.run(run_client(args.host, args.port, args.image, args.frames))
+    asyncio.run(run_client(args.host, args.port, args.image, args.audio, args.frames))

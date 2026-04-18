@@ -1,103 +1,108 @@
 # Tech Context
 
 ## Python Environment
-- Python 3.14, virtual environment: `python -m venv venv`
-- Activation (Windows): `venv\Scripts\activate`
-- Activation (Linux/Mac): `source venv/bin/activate`
+- Active local environment: `.venv`
+- Python version: `3.12.10`
 
 ## Key Dependencies
 
 | Package | Purpose |
 |---|---|
 | fastapi | HTTP + WebSocket framework |
-| uvicorn[standard] | ASGI server (runs FastAPI) |
-| python-multipart | Form/file upload support |
-| pydantic-settings | Env-var based config |
-| pillow | Image decoding (JPEG/PNG bytes → PIL Image) |
-| numpy | Array operations on image data |
-| httpx | Async HTTP client (Ollama API calls) |
-| torch 2.11.0+cu128 | CUDA tensor operations (BLIP + SAM inference) |
-| transformers 5.3.0 | BLIP model (BlipProcessor, BlipForConditionalGeneration) |
-| accelerate 1.13.0 | HuggingFace model optimization |
-| ultralytics | FastSAM-s segmentation model |
-| faster-whisper | Optimized Whisper STT (4-10x faster, CTranslate2 backend) |
-| sounddevice | Microphone recording (tests/mic_test.py demo only) |
-| edge-tts | Edge TTS async client (EmelNeural Turkish voice) |
+| uvicorn[standard] | ASGI server |
+| pydantic-settings | Env-based config |
+| httpx | Async HTTP client for Ollama |
+| torch 2.11.0+cu128 | CUDA tensor runtime |
+| transformers 5.x | BLIP caption model |
+| ultralytics | FastSAM-s segmentation |
+| faster-whisper | STT |
+| edge-tts | Turkish TTS |
+| paddlepaddle 3.0.0 | Paddle runtime |
+| paddleocr 3.4.0 | OCR backend |
 
 ## Hardware
-- GPU: RTX 5060 Ti 16GB VRAM
-- CUDA: 12.8 (torch cu128)
-- BLIP usage: ~4GB VRAM
-- FastSAM usage: ~500MB VRAM
-- Ollama: runs separately (qwen2.5:7b = 4.7GB VRAM or CPU RAM)
+- GPU: `NVIDIA GeForce RTX 5060 Ti`
+- VRAM: `16 GB`
+- Verified local state on 2026-04-16:
+  - `torch.cuda.is_available() == True`
 
-## Model Files
-- BLIP: cached from HuggingFace — `Salesforce/blip-image-captioning-large`
-- FastSAM: local file — `FastSAM-s.pt` (ultralytics format)
-- faster-whisper: auto-downloaded on first use — `small` model (switched from `tiny` for better Turkish accuracy)
-- Ollama models: managed by Ollama app — `qwen2.5:7b` (4.7GB), `llama3.2:3b` (1.9GB)
+## Cached / Installed Models
+- Hugging Face:
+  - `Salesforce/blip-image-captioning-large`
+  - `Systran/faster-whisper-tiny`
+  - `Systran/faster-whisper-small`
+- Local file:
+  - `FastSAM-s.pt`
+- Ollama:
+  - `qwen2.5:7b`
+  - `qwen3:4b`
+  - `glm-ocr:latest`
+  - `gemma3:4b`
+  - `llama3.2:3b`
 
-## Ollama Setup
-- Ollama runs as Windows desktop app on port 11434
-- API endpoint: `http://localhost:11434/api/generate`
-- Active model: `qwen2.5:7b` — set via `OLLAMA_MODEL` in .env
-- 2-call architecture per frame:
-  1. OCR check: `temperature=0.0, num_predict=3` → "yes" or "no"
-  2. Description: `temperature=0.2, num_predict=100` → Turkish 1-2 sentences
-- `num_ctx=512` — KV cache reduced from default 4096; prompts use ~300 tokens, 8x memory savings
-- Flash Attention: `OLLAMA_FLASH_ATTENTION=1` — must be set in host env before Ollama starts
-- Connect timeout: 3s (fast-fail), read timeout: 30s (configurable)
-- Model swap: change `OLLAMA_MODEL` in .env — no code change needed
+## Active Runtime Decisions
+- Vision stack:
+  - `FastSAM-s`
+  - `BLIP-large`
+- LLM stack:
+  - default: `qwen2.5:7b`
+- OCR stack:
+  - integrated: `PaddleOCR`
+  - fallback: `glm-ocr:latest`
+- STT stack:
+  - default: `tiny`
+- TTS stack:
+  - `tr-TR-EmelNeural`
 
-## qwen2.5:3b vs qwen2.5:7b Comparison
-To test 3b model (approx 2x faster, Turkish quality unknown):
-1. `.env` → `OLLAMA_MODEL=qwen2.5:3b`
-2. `ollama pull qwen2.5:3b` (if not already downloaded)
-3. `python tests/demo.py` — latency and description printed to console
-4. Compare: latency (Ollama line) and Turkish output quality
-5. If quality acceptable: keep 3b. If degraded: revert to `OLLAMA_MODEL=qwen2.5:7b`
-Note: demo.py header now shows active model name + num_ctx for easy comparison.
+## Local LLM Benchmark Snapshot - 2026-04-16
+- `qwen2.5:7b`
+  - scene prompt latency: about `5265 ms`
+  - OCR summary latency: about `656 ms`
+  - best usable quality in current flow
+- `qwen3:4b`
+  - scene prompt latency: about `3344 ms`
+  - OCR summary latency: about `813 ms`
+  - current output was empty or not usable in this Ollama flow
 
-## Docker Setup
-- Base image: `python:3.11-slim`
-- For GPU: `nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04` (commented in Dockerfile)
-- docker-compose uses `deploy.resources.reservations.devices` for GPU passthrough
-- Requires: NVIDIA Container Toolkit on host (`nvidia-container-runtime`)
+Decision:
+- Keep `qwen2.5:7b` as default.
 
-## Local Dev Commands
-```bash
-# Activate venv
-venv\Scripts\activate
+## OCR Validation Snapshot - 2026-04-16
+- PaddleOCR models were downloaded locally into workspace cache.
+- Current Windows runtime behavior:
+  - PaddleOCR falls back to CPU
+  - sample OCR results returned empty on tested images
+  - current local OCR latency is worse than the previous fallback
 
-# Install dependencies
-pip install -r requirements.txt
+Decision:
+- Keep PaddleOCR support in the codebase.
+- For a working local OCR demo today, fallback remains:
+  - `OCR_BACKEND=ollama_vision`
+  - `OCR_MODEL=glm-ocr:latest`
 
-# Run dev server (auto-reload)
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-
-# Test pipeline with real photos
-python tests/demo.py
-
-# Test STT with microphone
-python tests/mic_test.py --seconds 5
-
-# Run via Docker Compose (GPU config in docker-compose.yml)
-docker compose up --build
-```
-
-## Configuration (.env)
+## Optimized Local `.env` Profile
 ```env
-MOCK_STT=false            # faster-whisper tiny (CUDA)
-MOCK_SAM=false            # FastSAM-s (ultralytics)
-MOCK_BLIP=false           # blip-image-captioning-large
-MOCK_OLLAMA=false         # qwen2.5:7b via Ollama
-MOCK_TTS=false            # Edge TTS EmelNeural +30%
+MODEL_DEVICE=cuda
+HF_LOCAL_FILES_ONLY=true
 
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=qwen2.5:7b
-OLLAMA_TIMEOUT_SECONDS=30
+MOCK_STT=false
+MOCK_SAM=false
+MOCK_BLIP=false
+MOCK_OLLAMA=false
+MOCK_TTS=false
 
-BLIP_MODEL=Salesforce/blip-image-captioning-large
-TTS_VOICE=tr-TR-EmelNeural
-TTS_RATE=+30%
+STT_MODEL=tiny
+SAM_MAX_CROPS=2
+BLIP_MAX_CAPTIONS=2
+BLIP_MAX_NEW_TOKENS=24
+
+SCENE_OLLAMA_MODEL=qwen2.5:7b
+OCR_SUMMARY_MODEL=qwen2.5:7b
+OLLAMA_NUM_PREDICT=64
+OLLAMA_TEMPERATURE=0.1
+OLLAMA_KEEP_ALIVE=30m
+
+OCR_BACKEND=paddleocr
+PADDLEOCR_LANG=tr
+PADDLEOCR_VERSION=PP-OCRv5
 ```

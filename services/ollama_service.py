@@ -1,256 +1,214 @@
 # -*- coding: utf-8 -*-
 """
-Ollama Service -- LLM Description Stage
-=========================================
-Adapter layer for the language model.
-
-To swap the model (phi3:mini <-> llama3.2:3b <-> mistral <-> any future model):
-    - Change OLLAMA_MODEL in your .env file -- that is ALL, no code change needed.
-
-To swap the LLM provider entirely (Ollama <-> OpenAI <-> local llama.cpp):
-    - Only change _run_real() below.
-    - Function signature and return shape must stay identical.
-
-Input (from pipeline.jpg stage 4):
-    blip_result  -- contains an English scene caption from BLIP
-    user_query   -- optional Turkish question transcribed by STT (Stage 1)
-
-Turkish output:
-    System prompt uses proper Turkish characters (ş, ı, ğ, ü, ö, ç).
-    This produces cleaner TTS output from Edge TTS neural voices.
+Ollama Service -- Turkish Response Layer
+========================================
+This stage converts vision/OCR outputs into short Turkish responses suitable
+for low-latency assistive audio feedback.
 """
 
 import asyncio
+import random
 import re
 import time
-import random
 from typing import Any
 
 from core.config import settings
 from core.logger import logger
 
 
-# ---------------------------------------------------------------------------
-# Prompt templates — proper Turkish characters for clean TTS output
-# ---------------------------------------------------------------------------
-
-_SYSTEM_PROMPT = (
-    "Sen görme engelli kullanıcılara yardım eden bir görsel asistansın. "
-    "SADECE Türkçe yaz. Asla Çince, Arapça veya başka dil kullanma. "
-    "Sana noktalı virgülle ayrılmış birden fazla İngilizce sahne açıklaması verilecek; "
-    "bunlar aynı sahnenin farklı bölgelerinden alınmış anlık görüntülerdir. "
-    "Görevin: bu açıklamaları sentezleyerek Türkçe 1-2 kompakt cümleye dönüştürmek. "
-    "Kurallar: "
-    "1) Tüm açıklamaları birleştir, en önemli nesne/kişiyi öne çıkar. "
-    "2) İngilizce nesne adlarını doğru Türkçeye çevir: "
-    "   oatmeal=yulaf ezmesi, spoon=kaşık, gun=silah, pills=ilaç hapı, "
-    "   box=kutu, bag=torba/paket, clock tower=saat kulesi, cookie=kurabiye. "
-    "3) Tanıdık bir marka veya ilaç adı görürsen (örn: Kreon, Lifalif), adını söyle "
-    "   ve ne olduğunu 2-3 kelimeyle belirt (örn: Kreon, sindirim ilacı). "
-    "4) SADECE Türkçe yaz, asla liste veya tire kullanma. "
-    "5) Yön ifadesi kullan: elinizde / önünüzde / arkanızda. "
-    "6) Cevap maksimum 2 Türkçe cümle olmalı. "
-    "Örnek giriş: 'person holding Kreon pills box; another box in background' "
-    "Örnek çıkış: 'Elinizde Kreon sindirim ilacı kutusu var, arkada başka bir kutu görünüyor.'"
+_SCENE_SYSTEM_PROMPT = (
+    "Sen görme engelli kullanıcılar için çalışan bir yardımcı asistansın. "
+    "Sadece kısa ve doğal Türkçe yaz. "
+    "Cevap en fazla 2 cümle olsun. "
+    "En önemli nesneyi, engeli, yön bilgisini veya kullanıcının sorduğu şeyi söyle. "
+    "İngilizce sahne ipuçlarını doğru Türkçeye çevir. "
+    "Şu çevirilere dikkat et: pill veya pills=ilaç hapı, box of pills=ilaç kutusu, "
+    "oatmeal=yulaf ezmesi, spoon full of oatmeal=kaşıkta yulaf ezmesi, "
+    "cereal=kahvaltılık gevrek, bag=paket, gun=silah, game=oyun ekranı, "
+    "person=kişi, close up=yakın çekim. "
+    "Marka veya ilaç adı açıkça görünüyorsa adını koru. "
+    "Asla 'individü' gibi yabancılaşmış kelimeler kullanma. "
+    "Uydurma nesne, renk veya arka plan ekleme."
 )
 
-_SYSTEM_PROMPT_WITH_QUERY = (
-    "Sen görme engelli kullanıcılara yardım eden bir görsel asistansın. "
-    "SADECE Türkçe yaz. Asla Çince, Arapça veya başka dil kullanma. "
-    "Sana noktalı virgülle ayrılmış birden fazla İngilizce sahne açıklaması ve "
-    "kullanıcının Türkçe sorusu verilecek. "
-    "Görevin: soruyu tüm açıklamaları kullanarak Türkçe 1-2 cümleyle yanıtlamak. "
-    "Kurallar: "
-    "1) Tüm açıklamaları değerlendir, soruyla en ilgili bilgiyi öne çıkar. "
-    "2) İngilizce nesne adlarını doğru Türkçeye çevir. "
-    "3) Tanıdık marka/ilaç adı varsa adını ve kısa açıklamasını ver. "
-    "4) SADECE Türkçe yaz, asla liste veya tire kullanma. "
-    "5) Cevap maksimum 2 Türkçe cümle olmalı. "
+_OCR_SYSTEM_PROMPT = (
+    "Sen görme engelli kullanıcılar için çalışan bir yardımcı asistansın. "
+    "Sadece Türkçe yaz. "
+    "Sana görüntüden çıkarılmış ham metin verilecek. "
+    "Metindeki en önemli bilgiyi 1-2 kısa cümlede özetle. "
+    "İlaç için ad, tür ve gerekiyorsa doz; gıda için ürün ve önemli besin bilgisi; "
+    "etiket veya tabela için doğrudan işe yarayan ana bilgiyi söyle. "
+    "Yulaf, gevrek, protein, lif, içerik gibi kelimeleri ilaç olarak yorumlama; bunlar gıda ürünüdür. "
+    "Eksik veya belirsiz kısım varsa bunu kısa biçimde belirt."
 )
 
-_SYSTEM_OCR_CHECK = (
-    "You must answer with exactly one word: yes or no. Nothing else. "
-    "Does this scene contain objects where reading printed text would help a blind person? "
-    "Answer YES for: medicine/pill/drug/tablet boxes, labels with dosage, prescriptions, "
-    "signs, receipts, menus, product ingredient lists, documents. "
-    "Answer NO for: food without visible labels, people, nature, furniture, games, vehicles. "
-    "One word answer only:"
-)
-
-# Appended in post-processing (not generated by LLM) when OCR is recommended
-_OCR_OFFER = " Üzerindeki yazıları okumamı ister misiniz?"
-
-_USER_PROMPT_SCENE = "Sahne açıklamaları (İngilizce): {caption}\n\nBu sahneyi Türkçe 1-2 cümleyle açıkla."
-
-_USER_PROMPT_QUERY = (
+_USER_PROMPT_SCENE = (
+    "Sahne ipuçları:\n{caption}\n\n"
     "Kullanıcı sorusu: {user_query}\n"
-    "Sahne açıklamaları (İngilizce): {caption}\n\n"
-    "Soruyu yanıtlayarak Türkçe 1-2 cümleyle açıkla."
+    "Yalnızca Türkçe cevap ver:"
 )
 
+_USER_PROMPT_OCR = (
+    "OCR metni:\n{ocr_text}\n\n"
+    "Kullanıcı sorusu: {user_query}\n"
+    "Yalnızca Türkçe cevap ver:"
+)
 
-# ---------------------------------------------------------------------------
-# Public interface
-# ---------------------------------------------------------------------------
+_NO_TEXT_RESPONSE = "Okunabilir bir metin tespit edemedim."
+
+_MOCK_DESCRIPTIONS_TR = [
+    "Onunuzde bir kutu var, arkasinda baska bir nesne gorunuyor.",
+    "Masanin ustunde bir bilgisayar ve bardak var.",
+    "Solunuzda bir araba, saginizda bir bisiklet gorunuyor.",
+]
+
+_MOCK_OCR_RESPONSES_TR = [
+    "Bu bir ilac kutusu. Uzerinde Kreon 25000 yaziyor.",
+    "Paketin uzerinde yulaf ezmesi ve protein bilgisi yaziyor.",
+    _NO_TEXT_RESPONSE,
+]
+
 
 async def run_ollama(
     blip_result: dict[str, Any],
     user_query: str | None = None,
     history: list[dict] | None = None,
 ) -> dict[str, Any]:
-    """
-    Generate a Turkish scene description from the BLIP caption.
-
-    Args:
-        blip_result: Output of blip_service.run_blip() — contains "caption".
-        user_query:  Optional transcribed user question from STT (Stage 1).
-        history:     Conversation history for context-aware follow-ups.
-                     List of {user, assistant} dicts, max last 3 exchanges.
-
-    Returns:
-        { "description": str, "latency_ms": float }
-    """
     if settings.mock_ollama:
-        return await _run_mock(blip_result, user_query)
-    return await _run_real(blip_result, user_query, history or [])
+        return await _run_mock_scene(user_query)
+    caption = blip_result["caption"]
+    prompt = _USER_PROMPT_SCENE.format(
+        caption=caption,
+        user_query=user_query or "yok",
+    )
+    return await _run_real(
+        model=settings.scene_ollama_model,
+        system_prompt=_SCENE_SYSTEM_PROMPT,
+        user_prompt=prompt,
+        history=history or [],
+        num_predict=settings.scene_ollama_num_predict,
+        num_ctx=settings.scene_ollama_num_ctx,
+    )
 
 
-# ---------------------------------------------------------------------------
-# Implementation: Mock
-# ---------------------------------------------------------------------------
-
-_MOCK_DESCRIPTIONS_TR = [
-    "Önünüzde bir kapı var, solunuzda bir sandalye bulunuyor.",
-    "Masanın üzerinde dizüstü bilgisayar ve bardak var, sağınızda pencere görünüyor.",
-    "Duvara yaslanmış bir bisiklet var, bir kişi size doğru geliyor.",
-    "Bir ofis ortamındasınız, etrafta masalar ve sandalyeler var.",
-    "Solunuzda bir araba park edilmiş, karşıda bina girişi görünüyor.",
-]
-
-_MOCK_QUERY_RESPONSES_TR = [
-    "Önünüzde büyük bir nesne bulunuyor, dikkatli olun.",
-    "Yolunuzda herhangi bir engel görünmüyor.",
-    "Kapı solunuzda, yaklaşık iki metre uzaklıkta.",
-]
-
-
-async def _run_mock(
-    blip_result: dict[str, Any],
-    user_query: str | None,
+async def run_ollama_ocr(
+    ocr_result: dict[str, Any],
+    user_query: str | None = None,
+    history: list[dict] | None = None,
 ) -> dict[str, Any]:
+    if settings.mock_ollama:
+        return await _run_mock_ocr()
+
+    ocr_text = ocr_result.get("text")
+    if not ocr_text:
+        return {
+            "description": _NO_TEXT_RESPONSE,
+            "ocr_recommended": False,
+            "latency_ms": 0.0,
+        }
+
+    prompt = _USER_PROMPT_OCR.format(
+        ocr_text=ocr_text,
+        user_query=user_query or "yok",
+    )
+    return await _run_real(
+        model=settings.ocr_summary_model,
+        system_prompt=_OCR_SYSTEM_PROMPT,
+        user_prompt=prompt,
+        history=history or [],
+        num_predict=settings.ocr_summary_num_predict,
+        num_ctx=settings.ocr_summary_num_ctx,
+    )
+
+
+async def _run_mock_scene(user_query: str | None) -> dict[str, Any]:
     t = time.monotonic()
-    logger.info("Ollama [mock] | caption=%s | query=%s",
-                blip_result["caption"], repr(user_query))
     await asyncio.sleep(settings.mock_ollama_delay_ms / 1000)
+    description = random.choice(_MOCK_DESCRIPTIONS_TR)
     if user_query:
-        description = random.choice(_MOCK_QUERY_RESPONSES_TR)
-    else:
-        description = random.choice(_MOCK_DESCRIPTIONS_TR)
+        description = f"Sorunuza gore: {description}"
     latency = round((time.monotonic() - t) * 1000, 2)
-    logger.info("Ollama [mock] done | %.1fms", latency)
-    return {"description": description, "latency_ms": latency}
+    return {"description": description, "ocr_recommended": False, "latency_ms": latency}
 
 
-# ---------------------------------------------------------------------------
-# Implementation: Real Ollama HTTP API
-# ---------------------------------------------------------------------------
+async def _run_mock_ocr() -> dict[str, Any]:
+    t = time.monotonic()
+    await asyncio.sleep(settings.mock_ollama_delay_ms / 1000)
+    latency = round((time.monotonic() - t) * 1000, 2)
+    return {
+        "description": random.choice(_MOCK_OCR_RESPONSES_TR),
+        "ocr_recommended": False,
+        "latency_ms": latency,
+    }
+
 
 async def _run_real(
-    blip_result: dict[str, Any],
-    user_query: str | None,
+    model: str,
+    system_prompt: str,
+    user_prompt: str,
     history: list[dict],
+    num_predict: int,
+    num_ctx: int,
 ) -> dict[str, Any]:
-    """
-    Calls the Ollama HTTP API at settings.ollama_base_url.
-    Model is set via OLLAMA_MODEL in .env — no code change needed to swap models.
-    History is injected into the prompt for context-aware follow-ups.
-    """
     import httpx
 
     t = time.monotonic()
-    caption = blip_result["caption"]
-
-    # Build history context (inject as background info, not dialogue format)
-    history_text = ""
-    if history:
-        prev = [h["assistant"] for h in history[-2:] if h.get("assistant")]
-        if prev:
-            history_text = "Önceki açıklama: " + " | ".join(prev) + "\n\n"
-
-    base_payload = {
-        "model": settings.ollama_model,
-        "stream": False,
-        "options": {"temperature": 0.2, "num_predict": 100, "num_ctx": settings.ollama_num_ctx},
-    }
-
-    logger.info("Ollama [real] | model=%s | query=%s | caption=%s",
-                settings.ollama_model, repr(user_query), caption[:60])
-
-    # B3: Separate connect timeout (3s fast-fail) from read timeout (full budget)
     timeout = httpx.Timeout(settings.ollama_timeout_seconds, connect=3.0)
+    history_text = _history_text(history)
+    prompt = history_text + user_prompt
+
+    logger.info(
+        "Ollama [real] | model=%s | prompt_chars=%d",
+        model,
+        len(prompt),
+    )
 
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            # Call 1: OCR detection first (fast yes/no) — result feeds into description
-            ocr_response = await client.post(
+            response = await client.post(
                 f"{settings.ollama_base_url}/api/generate",
-                json={**base_payload,
-                      "system": _SYSTEM_OCR_CHECK,
-                      "prompt": caption,
-                      "options": {"temperature": 0.0, "num_predict": 3}},
+                json={
+                    "model": model,
+                    "system": system_prompt,
+                    "prompt": prompt,
+                    "stream": False,
+                    "keep_alive": settings.ollama_keep_alive,
+                    "options": {
+                        "temperature": settings.ollama_temperature,
+                        "num_predict": num_predict,
+                        "num_ctx": num_ctx,
+                    },
+                },
             )
-            ocr_response.raise_for_status()
-            ocr_raw = ocr_response.json().get("response", "").strip().lower()
-            ocr_recommended = ocr_raw.startswith("yes")
-
-            # Call 2: Description — includes OCR offer suffix when reading would help
-            if user_query:
-                system_prompt = _SYSTEM_PROMPT_WITH_QUERY
-                user_prompt = history_text + _USER_PROMPT_QUERY.format(
-                    user_query=user_query, caption=caption
-                )
-            else:
-                system_prompt = _SYSTEM_PROMPT
-                user_prompt = history_text + _USER_PROMPT_SCENE.format(caption=caption)
-
-            desc_response = await client.post(
-                f"{settings.ollama_base_url}/api/generate",
-                json={**base_payload, "system": system_prompt, "prompt": user_prompt},
-            )
-            desc_response.raise_for_status()
-            description = _clean_output(desc_response.json().get("response", ""))
-
-            # Append OCR offer as post-processing (not LLM-generated — keeps description fast)
-            if ocr_recommended:
-                description = description.rstrip(".!?") + "." + _OCR_OFFER
-
-    except httpx.ConnectError:
+            response.raise_for_status()
+            raw_text = response.json().get("response", "")
+    except httpx.ConnectError as exc:
         raise RuntimeError(
             f"Ollama is unreachable at {settings.ollama_base_url}. "
             "Make sure Ollama is running: ollama serve"
-        )
-    except httpx.TimeoutException:
+        ) from exc
+    except httpx.TimeoutException as exc:
         raise RuntimeError(
             f"Ollama timed out after {settings.ollama_timeout_seconds}s. "
-            f"Model '{settings.ollama_model}' may still be loading — try again in a moment."
-        )
+            f"Model '{model}' may still be loading."
+        ) from exc
 
+    description = _clean_output(raw_text)
     latency = round((time.monotonic() - t) * 1000, 2)
-    logger.info("Ollama [real] done | %.1fms | ocr=%s | output=%s",
-                latency, ocr_recommended, description[:80])
-    return {"description": description, "ocr_recommended": ocr_recommended, "latency_ms": latency}
+    logger.info("Ollama [real] done | %.1fms | output=%s", latency, description[:80])
+    return {"description": description, "ocr_recommended": False, "latency_ms": latency}
 
 
-# ---------------------------------------------------------------------------
-# JSON output parser — extracts description + ocr_recommended from LLM response
-# ---------------------------------------------------------------------------
+def _history_text(history: list[dict]) -> str:
+    snippets = [item["assistant"] for item in history[-1:] if item.get("assistant")]
+    if not snippets:
+        return ""
+    return "Baglam: " + " ".join(snippets) + "\n\n"
+
 
 def _clean_output(raw: str) -> str:
-    """Strip LLM formatting artifacts so Edge TTS reads clean sentences."""
     text = raw.strip()
-    text = re.sub(r'^[^\n]{0,60}:\s*\n', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'^\s*[-*•]\s*', '', text, flags=re.MULTILINE)
-    text = re.sub(r'\s*\([a-zA-Z ]+\)', '', text)
-    text = text.strip('"\'')
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
+    text = re.sub(r"^[^\n]{0,40}:\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^\s*[-*]\s*", "", text, flags=re.MULTILINE)
+    text = re.sub(r"\s+", " ", text).strip(" \"'")
+    return text or _NO_TEXT_RESPONSE

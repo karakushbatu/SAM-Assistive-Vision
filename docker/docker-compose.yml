@@ -28,12 +28,25 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - MOCK_PIPELINE=true
-      - MOCK_SAM_DELAY_MS=120
-      - MOCK_CLASSIFIER_DELAY_MS=45
-      - MOCK_OLLAMA_DELAY_MS=800
+      - MOCK_STT=false
+      - MODEL_DEVICE=auto
+      - MOCK_SAM=false
+      - MOCK_BLIP=false
+      - MOCK_OLLAMA=false
+      - MOCK_TTS=false
       - OLLAMA_BASE_URL=http://ollama:11434
-      - OLLAMA_MODEL=llama3:8b
+      - OLLAMA_MODEL=qwen2.5:7b
+      - OLLAMA_NUM_CTX=512
+      - STT_MODEL=small
+      - STT_COMPUTE_TYPE=auto
+      - STT_MAX_AUDIO_SECONDS=8
+      - MAX_FRAME_SIZE=640
+      - MAX_WS_FRAME_BYTES=10485760
+      - SAM_MAX_CROPS=3
+      - BLIP_MAX_CAPTIONS=3
+      - BLIP_MAX_NEW_TOKENS=32
+      - OLLAMA_NUM_PREDICT=80
+      - TTS_STREAMING=true
       - DEBUG=true
     volumes:
       # Hot-reload: mount source code so changes reflect without rebuild
