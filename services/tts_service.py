@@ -47,7 +47,14 @@ async def run_tts(ollama_result: dict[str, Any]) -> dict[str, Any]:
     """
     if settings.mock_tts:
         return await _run_mock(ollama_result)
-    return await _run_edge_tts(ollama_result)
+    try:
+        return await _run_edge_tts(ollama_result)
+    except Exception as exc:
+        logger.warning("TTS [edge] failed, falling back to silent audio: %s", exc)
+        fallback = await _run_mock(ollama_result)
+        fallback["fallback"] = "silent_mock"
+        fallback["error"] = str(exc)
+        return fallback
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +129,10 @@ async def stream_tts(text: str) -> AsyncGenerator[bytes, None]:
     async for chunk in communicate.stream():
         if chunk["type"] == "audio":
             yield chunk["data"]
+
+
+def get_silent_audio_bytes() -> bytes:
+    return _SILENT_MP3
 
 
 # ---------------------------------------------------------------------------

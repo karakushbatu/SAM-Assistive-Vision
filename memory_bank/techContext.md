@@ -17,8 +17,7 @@
 | ultralytics | FastSAM-s segmentation |
 | faster-whisper | STT |
 | edge-tts | Turkish TTS |
-| paddlepaddle 3.0.0 | Paddle runtime |
-| paddleocr 3.4.0 | OCR backend |
+| sounddevice | Local microphone capture for demo/testing |
 
 ## Hardware
 - GPU: `NVIDIA GeForce RTX 5060 Ti`
@@ -47,12 +46,14 @@
 - LLM stack:
   - default: `qwen2.5:7b`
 - OCR stack:
-  - integrated: `PaddleOCR`
-  - fallback: `glm-ocr:latest`
+  - active default: `glm-ocr:latest`
+  - optional experimental path: `PaddleOCR`
 - STT stack:
   - default: `tiny`
 - TTS stack:
-  - `tr-TR-EmelNeural`
+  - current local fallback: `tr-TR-AhmetNeural`
+  - current local rate profile: `+10%`
+  - future product direction: stronger premium TTS provider for more natural voice quality
 
 ## Local LLM Benchmark Snapshot - 2026-04-16
 - `qwen2.5:7b`
@@ -67,16 +68,16 @@
 Decision:
 - Keep `qwen2.5:7b` as default.
 
-## OCR Validation Snapshot - 2026-04-16
-- PaddleOCR models were downloaded locally into workspace cache.
-- Current Windows runtime behavior:
-  - PaddleOCR falls back to CPU
-  - sample OCR results returned empty on tested images
-  - current local OCR latency is worse than the previous fallback
+## OCR Validation Snapshot - 2026-04-23
+- PaddleOCR was integrated and evaluated.
+- Current Windows runtime behavior was not good enough for active use:
+  - CPU fallback
+  - weak or empty OCR extraction on local sample set
+  - worse latency than the previous path
 
 Decision:
-- Keep PaddleOCR support in the codebase.
-- For a working local OCR demo today, fallback remains:
+- Keep PaddleOCR only as an optional experiment.
+- Active local OCR/demo path remains:
   - `OCR_BACKEND=ollama_vision`
   - `OCR_MODEL=glm-ocr:latest`
 
@@ -102,7 +103,6 @@ OLLAMA_NUM_PREDICT=64
 OLLAMA_TEMPERATURE=0.1
 OLLAMA_KEEP_ALIVE=30m
 
-OCR_BACKEND=paddleocr
-PADDLEOCR_LANG=tr
-PADDLEOCR_VERSION=PP-OCRv5
+OCR_BACKEND=ollama_vision
+OCR_MODEL=glm-ocr:latest
 ```

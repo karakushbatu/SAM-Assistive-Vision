@@ -5,6 +5,7 @@ Intent Service -- Turkish Voice Command Dispatcher
 Fast keyword routing for assistive voice commands.
 """
 
+import re
 import unicodedata
 from typing import Any
 
@@ -16,9 +17,6 @@ _OCR_KEYWORDS = [
     "yazilari oku",
     "etiketi oku",
     "tabelayi oku",
-    "evet",
-    "olur",
-    "tamam",
 ]
 
 _SCENE_KEYWORDS = [
@@ -49,7 +47,6 @@ _CAMERA_KEYWORDS = [
     "kamerayi ac",
     "kamera ac",
     "baslat",
-    "ac",
 ]
 
 
@@ -59,14 +56,14 @@ def detect_intent(stt_text: str | None) -> dict[str, Any]:
 
     normalized = _normalize(stt_text)
 
+    if _exact_match(normalized, _REPLAY_KEYWORDS):
+        return {"intent": "replay", "keeps_context": True, "raw_text": stt_text}
+    if _exact_match(normalized, _MUTE_KEYWORDS):
+        return {"intent": "mute", "keeps_context": True, "raw_text": stt_text}
+    if _exact_match(normalized, _CAMERA_KEYWORDS):
+        return {"intent": "camera", "keeps_context": True, "raw_text": stt_text}
     if _matches(normalized, _OCR_KEYWORDS):
         return {"intent": "ocr", "keeps_context": True, "raw_text": stt_text}
-    if _matches(normalized, _REPLAY_KEYWORDS):
-        return {"intent": "replay", "keeps_context": True, "raw_text": stt_text}
-    if _matches(normalized, _MUTE_KEYWORDS):
-        return {"intent": "mute", "keeps_context": True, "raw_text": stt_text}
-    if _matches(normalized, _CAMERA_KEYWORDS):
-        return {"intent": "camera", "keeps_context": True, "raw_text": stt_text}
     if _matches(normalized, _SCENE_KEYWORDS):
         return {"intent": "scene", "keeps_context": True, "raw_text": stt_text}
 
@@ -118,4 +115,13 @@ def _normalize(text: str) -> str:
 
 
 def _matches(text: str, keywords: list[str]) -> bool:
-    return any(_normalize(keyword) in text for keyword in keywords)
+    for keyword in keywords:
+        normalized_keyword = _normalize(keyword)
+        pattern = rf"(?<!\w){re.escape(normalized_keyword)}(?!\w)"
+        if re.search(pattern, text):
+            return True
+    return False
+
+
+def _exact_match(text: str, keywords: list[str]) -> bool:
+    return any(text == _normalize(keyword) for keyword in keywords)

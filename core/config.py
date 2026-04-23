@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     ocr_summary_model: str = "qwen2.5:7b"
     ocr_summary_num_predict: int = 72
     ocr_summary_num_ctx: int = 512
-    ocr_backend: str = "paddleocr"  # "paddleocr" | "ollama_vision"
+    ocr_backend: str = "ollama_vision"  # "paddleocr" | "ollama_vision"
     ocr_model: str = "glm-ocr:latest"
     ocr_timeout_seconds: int = 45
     paddleocr_lang: str = "tr"
@@ -79,8 +79,8 @@ class Settings(BaseSettings):
     max_ws_frame_bytes: int = 10 * 1024 * 1024  # Protect WebSocket from oversized payloads
 
     # TTS — Edge TTS (used when mock_tts=False)
-    tts_voice: str = "tr-TR-EmelNeural"   # Turkish female neural voice
-    tts_rate: str = "+30%"                # Speech speed
+    tts_voice: str = "tr-TR-AhmetNeural"  # Turkish male neural voice
+    tts_rate: str = "+10%"                # Slightly faster than default, more natural than +30%
     tts_streaming: bool = True            # Stream chunks over WebSocket for faster first audio
 
     model_config = SettingsConfigDict(

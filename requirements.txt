@@ -35,7 +35,3 @@ sounddevice>=0.4.0        # Microphone recording (tests/mic_test.py demo)
 ultralytics>=8.0.0
 transformers>=4.40.0
 accelerate>=0.27.0
-
-# --- OCR (Stage 4b -- active in OCR mode) ---
-paddlepaddle==3.0.0
-paddleocr==3.4.0

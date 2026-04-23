@@ -24,6 +24,7 @@ Thumbs.db
 
 # Logs
 *.log
+.cache/
 
 # --- Test / debug output files (generated during development) ---
 tests/output/
@@ -43,6 +44,10 @@ turkce_test*
 *.safetensors
 models/
 weights/
+
+# Android test shell
+android-test-shell/.gradle/
+android-test-shell/**/build/
 
 # Claude memory (local only)
 .claude/

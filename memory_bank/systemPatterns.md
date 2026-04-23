@@ -31,15 +31,6 @@ image
 ```text
 image
   -> FastSAM-s
-  -> PaddleOCR
-  -> qwen2.5:7b summary
-  -> Edge TTS
-```
-
-### OCR fallback mode
-```text
-image
-  -> FastSAM-s
   -> glm-ocr:latest
   -> qwen2.5:7b summary
   -> Edge TTS
@@ -55,6 +46,7 @@ audio+image
 
 ## 3. Intent Routing Pattern
 - `detect_intent(stt_text)` runs before expensive vision work when audio is present.
+- Fast-path commands now require stricter matching to avoid misrouting free-form Turkish speech.
 - Supported intents:
   - `scene`
   - `ocr`
@@ -63,12 +55,15 @@ audio+image
   - `camera`
 
 ## 4. OCR Backend Pattern
-- OCR is now selectable at config level:
-  - `OCR_BACKEND=paddleocr`
+- OCR is selectable at config level:
   - `OCR_BACKEND=ollama_vision`
+  - `OCR_BACKEND=paddleocr`
 - Reason:
   - allows side-by-side validation without changing the mobile contract
   - keeps OCR experiments isolated from scene-mode stability
+- Current active recommendation:
+  - `OCR_BACKEND=ollama_vision`
+  - `OCR_MODEL=glm-ocr:latest`
 
 ## 5. OCR Recommendation Pattern
 - OCR recommendation remains heuristic, not LLM-based.
@@ -79,7 +74,7 @@ audio+image
 
 ## 6. GPU Pattern
 - SAM and BLIP share a common `gpu_inference_lock`.
-- Current Windows validation indicates PaddleOCR is not using GPU in this setup.
+- Current Windows validation indicates PaddleOCR is not the active GPU-backed path in this setup.
 
 ## 7. Android Handoff Pattern
 - Android side only needs:
@@ -88,6 +83,22 @@ audio+image
   3. read JSON result
   4. read MP3 or MP3 chunks
   5. optionally inspect `/contract`
+- Current local Android-like clients:
+  - `tests/ws_client_demo.py`
+  - `android-test-shell/`
+
+## 7b. Mobile Interaction Pattern
+- Final intended app interaction is `Model A`.
+- Pattern:
+  1. camera preview stays open
+  2. user presses a trigger button
+  3. app captures the latest frame
+  4. app records a short voice query
+  5. both are sent together through the existing `audio+image` envelope
+- Reason:
+  - lower bandwidth than continuous streaming
+  - simpler sync model
+  - better fit for low-latency assistive feedback
 
 ## 8. Model Selection Pattern
 - Scene mode and OCR-summary mode can use different LLMs:
@@ -100,5 +111,10 @@ audio+image
 ## 9. Current Recommendation Pattern
 - Stable demo branch:
   - scene mode with `qwen2.5:7b`
+- Stable OCR branch:
+  - `glm-ocr:latest` with `OCR_BACKEND=ollama_vision`
 - Experimental branch:
   - PaddleOCR on current Windows local stack
+- Voice quality recommendation:
+  - `Edge TTS` for dev/demo fallback
+  - premium TTS provider for final human-like voice quality

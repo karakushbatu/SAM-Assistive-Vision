@@ -450,6 +450,12 @@ async def vision_websocket(websocket: WebSocket):
                         stt_result["text"] if stt_result is not None else None
                     )
                     intent = intent_info["intent"]
+                    logger.info(
+                        "Intent detected | text=%r | intent=%s | mode_before=%s",
+                        stt_result["text"] if stt_result is not None else None,
+                        intent,
+                        current_mode,
+                    )
 
                     if intent == "replay" and last_result is not None:
                         await websocket.send_text(
@@ -508,6 +514,12 @@ async def vision_websocket(websocket: WebSocket):
                     # Detect intent from STT text this frame returned
                     intent_info = detect_intent(result.metadata.get("user_query"))
                     intent = intent_info["intent"]
+                    logger.info(
+                        "Intent re-check | text=%r | intent=%s | mode_before=%s",
+                        result.metadata.get("user_query"),
+                        intent,
+                        current_mode,
+                    )
 
                     # Update mode based on intent
                     if intent == "ocr":
@@ -557,12 +569,21 @@ async def vision_websocket(websocket: WebSocket):
 
                     # Message 2: MP3 audio
                     if use_streaming:
-                        # Stream chunks as they are generated — client hears audio sooner
-                        from services.tts_service import stream_tts
+                        # Stream chunks as they are generated - client hears audio sooner
+                        from services.tts_service import get_silent_audio_bytes, stream_tts
                         audio_chunks: list[bytes] = []
-                        async for chunk in stream_tts(result.metadata["description"]):
-                            audio_chunks.append(chunk)
-                            await websocket.send_bytes(chunk)
+                        try:
+                            async for chunk in stream_tts(result.metadata["description"]):
+                                audio_chunks.append(chunk)
+                                await websocket.send_bytes(chunk)
+                        except Exception as tts_error:
+                            logger.warning("Streaming TTS failed, falling back to silent audio: %s", tts_error)
+                            fallback_chunk = get_silent_audio_bytes()
+                            audio_chunks = [fallback_chunk]
+                            result.metadata["pipeline"]["tts"]["fallback"] = "silent_mock"
+                            result.metadata["pipeline"]["tts"]["error"] = str(tts_error)
+                            await websocket.send_bytes(fallback_chunk)
+
                         result.audio_bytes = b"".join(audio_chunks)
                         audio_size = len(result.audio_bytes)
                         result.metadata["pipeline"]["tts"]["audio_size_bytes"] = audio_size

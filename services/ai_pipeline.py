@@ -130,7 +130,9 @@ async def run_full_pipeline(
                        "latency_ms":       ocr_result["latency_ms"]},
             "ollama": {"latency_ms":       ollama_result["latency_ms"]},
             "tts":    {"audio_size_bytes": tts_result["audio_size_bytes"],
-                       "latency_ms":       tts_result["latency_ms"]},
+                       "latency_ms":       tts_result["latency_ms"],
+                       "fallback":         tts_result.get("fallback"),
+                       "error":            tts_result.get("error")},
         },
     }
 

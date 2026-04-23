@@ -36,6 +36,8 @@ services:
       - MOCK_TTS=false
       - OLLAMA_BASE_URL=http://ollama:11434
       - OLLAMA_MODEL=qwen2.5:7b
+      - OCR_BACKEND=ollama_vision
+      - OCR_MODEL=glm-ocr:latest
       - OLLAMA_NUM_CTX=512
       - STT_MODEL=small
       - STT_COMPUTE_TYPE=auto

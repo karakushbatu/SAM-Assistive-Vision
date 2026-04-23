@@ -34,7 +34,7 @@ image
 ```text
 image
   -> FastSAM-s
-  -> PaddleOCR
+  -> glm-ocr:latest
   -> qwen2.5:7b
   -> Edge TTS
 ```
@@ -56,7 +56,6 @@ audio+image
 - BLIP-large / transformers
 - Ollama
 - Edge TTS
-- PaddleOCR
 
 ## Gereksinimler
 
@@ -116,9 +115,8 @@ OLLAMA_NUM_PREDICT=64
 OLLAMA_TEMPERATURE=0.1
 OLLAMA_KEEP_ALIVE=30m
 
-OCR_BACKEND=paddleocr
-PADDLEOCR_LANG=tr
-PADDLEOCR_VERSION=PP-OCRv5
+OCR_BACKEND=ollama_vision
+OCR_MODEL=glm-ocr:latest
 
 TTS_STREAMING=true
 ```
@@ -170,14 +168,40 @@ Beklenen:
 .\.venv\Scripts\python tests\ws_client_demo.py --host 127.0.0.1 --port 8000 --image tests/sample_images/yulaf.jpg --audio path\\to\\query.wav --frames 1
 ```
 
-### 5. Direct pipeline benchmark
+### 5. Interaktif terminal demo
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/run_demo_terminal.ps1
+```
+
+Bu script senden:
+- bir gorsel secmeni
+- istersen mikrofondan soru sormanı veya WAV vermeni
+- sonra backend sonucunu terminalde gormeni
+ister.
+
+### 5b. Tek komutla tam demo
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/run_full_demo.ps1
+```
+
+Bu script:
+- backend'i ayaga kaldirir
+- `/health` cevap verene kadar bekler
+- sonra interaktif terminal demo client'ini acar
+- demo bitince backend process'ini kapatir
+
+Not:
+- Edge TTS disa cikamiyorsa pipeline artik dusmez
+- text sonuc yine gelir ve sessiz fallback MP3 doner
+
+### 6. Direct pipeline benchmark
 ```powershell
 .\.venv\Scripts\python tests\test_pipeline_live.py --mode scene
 .\.venv\Scripts\python tests\test_pipeline_live.py --mode ocr
 .\.venv\Scripts\python tests\test_pipeline_live.py --mode scene --skip-tts
 ```
 
-### 6. Model benchmark
+### 7. Model benchmark
 ```powershell
 .\.venv\Scripts\python tests\benchmark_model_candidates.py
 ```
@@ -192,31 +216,20 @@ Beklenen:
 
 Bu hatta backend stabil ve demo icin kullanilabilir.
 
-### OCR mode - 2026-04-16
-- PaddleOCR backend kod tabanina eklendi ve aktif backend olarak baglandi.
-- Ancak mevcut Windows lokal runtime testlerinde:
-  - OCR metni ornek goruntulerde bos dondu
-  - PaddleOCR GPU yerine CPU fallback yapti
-  - toplam sure ciddi bicimde artti
-
-Son test:
-- `ilaç.jpg`: OCR branch toplam yaklasik `22625 ms`
-- ortalama OCR branch: yaklasik `16005 ms`
-
-Sonuc:
-- PaddleOCR entegrasyonu kodda mevcut
-- Fakat mevcut lokal Windows stack icin uretim default'u olmaya hazir degil
+### OCR mode - guncel pratik karar
+- Aktif demo/backend varsayilani tekrar `ollama_vision`
+- Sebep:
+  - mevcut Windows lokal runtime'da PaddleOCR pratik sonuc vermedi
+  - `glm-ocr:latest` daha guvenilir demo OCR davranişi verdi
 
 ## Pratik OCR Notu
 
-Bugun calisan bir lokal demo OCR gerekiyorsa gecici fallback:
+Bugun calisan lokal demo OCR:
 
 ```env
 OCR_BACKEND=ollama_vision
 OCR_MODEL=glm-ocr:latest
 ```
-
-Bu fallback daha yavas olsa da mevcut ornek veri uzerinde daha anlamli sonuc verdi.
 
 ## LLM Degerlendirmesi
 
@@ -244,14 +257,93 @@ Yani test ederken STT'yi aktif kullanabilirsin. Bunun icin `--audio` ile bir WAV
 ## Android Entegrasyonu Yuksek Seviye
 
 1. Android kamera goruntusunu alir
-2. Gerekirse mikrofon sesini WAV olarak hazirlar
-3. `WS /ws/vision` baglantisi acar
-4. Binary payload gonderir
-5. JSON sonucu alir
-6. MP3 sonucu alir ve oynatir
+2. Kullanici bir tetikleme tusuna basar
+3. Uygulama o andaki en guncel frame'i alir
+4. Ayni interaction icinde kisa bir mikrofon kaydi alir
+5. Gerekirse mikrofon sesini WAV olarak hazirlar
+6. `WS /ws/vision` baglantisi acar
+7. Binary payload gonderir
+8. JSON sonucu alir
+9. MP3 sonucu alir ve oynatir
+
+Final mobil UX icin tercih edilen model:
+
+```text
+Model A
+  -> kamera preview acik
+  -> kullanici tetikleme tusuna basar
+  -> uygulama son frame'i yakalar
+  -> 2-4 saniyelik ses sorgusu alir
+  -> image + audio tek request olarak backend'e gider
+```
+
+Bu, surekli video stream gondermekten daha hafif ve daha kararlidir.
+
+## TTS Notu
+
+Su an aktif TTS motoru `Edge TTS` ve lokal demo icin yeterlidir.
+Guncel varsayilan local ses profili:
+
+```env
+TTS_VOICE=tr-TR-AhmetNeural
+TTS_RATE=+10%
+```
+
+Ancak daha dogal, daha insansi ve daha duygulu ses icin production yonu su olmalidir:
+
+1. `Edge TTS`
+   - local/demo fallback
+   - sifir ek servis maliyeti
+   - kalite sinirli
+
+2. `Cartesia Sonic-2 / Sonic-3`
+   - dusuk latency odakli
+   - Turkish destegi bulunan modern streaming TTS secenegi
+
+3. `ElevenLabs`
+   - en dogal ve en etkileyici ses kalitesi icin guclu aday
+   - daha pahali ve harici servis bagimliligi getirir
+
+Kisa karar:
+- demo ve local runtime: `Edge TTS`
+- gercek urun hissi icin sonraki adim: harici premium TTS provider
 
 Android tarafi icin sozlesme:
 - `GET /contract`
+
+## Android Emulator Test Shell
+
+Repo icinde Android Studio ile acilabilecek kucuk bir test shell var:
+
+```text
+android-test-shell/
+```
+
+Amaci:
+- emulator icinde gorsel secmek
+- opsiyonel WAV secmek
+- backend'e WebSocket ile gondermek
+- JSON ve MP3 sonucunu gormek
+
+Varsayilan emulator backend adresi:
+
+```text
+ws://10.0.2.2:8000/ws/vision
+```
+
+Kullanim akisi:
+
+1. Android Studio ile `android-test-shell/` klasorunu ac
+2. Bir Android Emulator baslat
+3. Backend'i bu repodan `scripts/start_backend.ps1` ile calistir
+4. Shell icinde gorsel sec
+5. Istersen WAV sec
+6. `Scene Gonder` veya `Audio+Image Gonder` ile backend'i test et
+
+Not:
+- Bu shell su an minimal bir integration client'tir
+- Canli mikrofon kaydi yerine WAV secimi kullanir
+- Amac Android entegrasyonunu erken dogrulamaktir, production UI yapmak degil
 
 ## Bugun Icin Net Durum
 
